@@ -6,14 +6,26 @@
 namespace twizzle::renderer {
 
 // Colours: +X R, -X L, +Y U, -Y D, +Z F, -Z B (from Cube3D.ts axesInfo[]).
-const glm::vec3 CubeGeometry::kFaceColor[6] = {
-    {1.000f, 0.000f, 0.000f},  // R  0xff0000
-    {1.000f, 0.600f, 0.000f},  // L  0xff9900
-    {1.000f, 1.000f, 1.000f},  // U  0xffffff
-    {1.000f, 1.000f, 0.000f},  // D  0xffff00
-    {0.000f, 1.000f, 0.000f},  // F  0x00ff00
-    {0.133f, 0.400f, 1.000f},  // B  0x2266ff
+glm::vec3 CubeGeometry::kFaceColor[6] = {
+    {1.000f, 0.000f, 0.000f},  // R  0xff0000   +X
+    {1.000f, 0.600f, 0.000f},  // L  0xff9900   -X
+    {1.000f, 1.000f, 1.000f},  // U  0xffffff   +Y
+    {1.000f, 1.000f, 0.000f},  // D  0xffff00   -Y
+    {0.000f, 1.000f, 0.000f},  // F  0x00ff00   +Z
+    {0.133f, 0.400f, 1.000f},  // B  0x2266ff   -Z
 };
+
+float CubeGeometry::kFoundAlpha = 0.30f;
+
+void CubeGeometry::setFaceColors(const glm::vec3 colors[6]) {
+    for (int i = 0; i < 6; ++i) {
+        kFaceColor[i] = colors[i];
+    }
+}
+
+void CubeGeometry::setBodyAlpha(float alpha) {
+    kFoundAlpha = alpha;
+}
 
 // ---------------------------------------------------------------------------
 // Helper: push a quad — always CCW winding (front face = outward normal).

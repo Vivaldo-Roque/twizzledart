@@ -40,11 +40,17 @@ public:
     static constexpr float kStickerElev = 0.503f;          ///< sticker distance from cubie centre
     static constexpr float kStickerHalf = 0.500f * 0.85f;  ///< sticker half-size (= 0.425)
     static constexpr float kHintElev    = 1.45f;            ///< hint sticker distance from centre
-    static constexpr float kFoundAlpha  = 0.30f;            ///< foundation opacity
+    static float          kFoundAlpha;                      ///< foundation opacity (mutable)
     static constexpr float kHintAlpha   = 0.50f;            ///< hint sticker opacity
 
+    /// Updates the cubie body (foundation) opacity. Rebuild geometry after.
+    static void setBodyAlpha(float alpha);
+
     /// Sticker colours indexed by face: +X, -X, +Y, -Y, +Z, -Z.
-    static const glm::vec3 kFaceColor[6];
+    static glm::vec3 kFaceColor[6];
+
+    /// Updates sticker colours and rebuilds geometry on next build() call.
+    static void setFaceColors(const glm::vec3 colors[6]);
 
     /// @brief Builds all 26 cubies into flat vertex + metadata buffers.
     /// @param vertices Cleared and filled with every triangle vertex.

@@ -83,6 +83,17 @@ public:
     /// Sets the OrbitCamera position.
     void setCameraPosition(float latitude, float longitude, float radius);
 
+    /// Toggles rendering of the hint stickers.
+    void setShowHint(bool show);
+
+    /// Updates sticker colours (6 faces, each as RGB in [0,1]) and
+    /// rebuilds the geometry. Index order: +X, -X, +Y, -Y, +Z, -Z.
+    void setFaceColors(const float colors[6][3]);
+
+    /// Sets the cubie body (foundation) opacity. 0.3 = translucent (crystal),
+    /// 1.0 = opaque black (normal). Rebuilds geometry.
+    void setBodyAlpha(float alpha);
+
 private:
     GLuint vao_ = 0, vbo_ = 0;
     Shader shader_;
@@ -99,6 +110,7 @@ private:
     int   viewWidth_   = 1, viewHeight_ = 1;
 
     float bgR_ = 0.08f, bgG_ = 0.08f, bgB_ = 0.10f, bgA_ = 1.0f;
+    bool  showHint_ = true;
 
     bool  dragging_  = false;
     float lastDragX_ = 0, lastDragY_ = 0;

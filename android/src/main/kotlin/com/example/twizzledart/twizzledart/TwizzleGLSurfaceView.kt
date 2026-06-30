@@ -145,11 +145,30 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
     fun getSpeed(): Float = renderer.nativeGetSpeed()
 
     fun setGLBackgroundColor(r: Float, g: Float, b: Float, a: Float) {
+        renderer.cachedBgColor = floatArrayOf(r, g, b, a)
         queueEvent { renderer.nativeSetBackgroundColor(r, g, b, a) }
     }
 
     fun setCameraPosition(lat: Float, lon: Float, rad: Float) {
+        renderer.cachedCameraPosition = floatArrayOf(lat, lon, rad)
         queueEvent { renderer.nativeSetCameraPosition(lat, lon, rad) }
+    }
+
+    fun setShowHint(enabled: Boolean) {
+        renderer.cachedShowHint = enabled
+        queueEvent { renderer.nativeSetShowHint(enabled) }
+    }
+
+    /** Sets face colours as 18 floats (6 faces × RGB). */
+    fun setFaceColors(colors: FloatArray) {
+        renderer.cachedFaceColors = colors
+        queueEvent { renderer.nativeSetFaceColors(colors) }
+    }
+
+    /** Sets cubie body (foundation) alpha: 0.3 = crystal, 1.0 = opaque black. */
+    fun setBodyAlpha(alpha: Float) {
+        renderer.cachedBodyAlpha = alpha
+        queueEvent { renderer.nativeSetBodyAlpha(alpha) }
     }
 
     fun seekFraction(f: Float) {
@@ -175,9 +194,31 @@ class TwizzleRenderer : GLSurfaceView.Renderer {
 
     private var lastNano = System.nanoTime()
 
+    var cachedBgColor: FloatArray? = null
+    var cachedCameraPosition: FloatArray? = null
+    var cachedShowHint: Boolean? = null
+    var cachedFaceColors: FloatArray? = null
+    var cachedBodyAlpha: Float? = null
+
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         nativeOnSurfaceCreated()
         lastNano = System.nanoTime()
+
+        cachedBgColor?.let {
+            nativeSetBackgroundColor(it[0], it[1], it[2], it[3])
+        }
+        cachedCameraPosition?.let {
+            nativeSetCameraPosition(it[0], it[1], it[2])
+        }
+        cachedShowHint?.let {
+            nativeSetShowHint(it)
+        }
+        cachedFaceColors?.let {
+            nativeSetFaceColors(it)
+        }
+        cachedBodyAlpha?.let {
+            nativeSetBodyAlpha(it)
+        }
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -215,6 +256,9 @@ class TwizzleRenderer : GLSurfaceView.Renderer {
     external fun nativeSetCameraPosition(lat: Float, lon: Float, rad: Float)
     external fun nativeSeekFraction(f: Float)
     external fun nativeCurrentFraction(): Float
+    external fun nativeSetShowHint(enabled: Boolean)
+    external fun nativeSetFaceColors(colors: FloatArray)
+    external fun nativeSetBodyAlpha(alpha: Float)
 
     companion object {
         init { System.loadLibrary("twizzle") }

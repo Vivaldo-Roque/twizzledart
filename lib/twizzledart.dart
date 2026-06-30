@@ -5,6 +5,14 @@ import 'package:flutter/widgets.dart';
 /// Callback when the 3D Twizzle view is ready to be controlled.
 typedef TwizzleViewCreatedCallback = void Function(TwizzleViewController controller);
 
+/// Visual appearance mode for the cube.
+enum TwizzleAppearance {
+  /// Crystal/glassy look: translucent body (alpha 0.3) + hint stickers.
+  crystal,
+  /// Normal look: opaque black body (alpha 1.0), no hint stickers.
+  normal,
+}
+
 /// Controller to apply algorithms and manage the state of a [TwizzleView].
 class TwizzleViewController {
   final int _id;
@@ -174,6 +182,43 @@ class TwizzleViewController {
       debugPrint("Error setting touch enabled: ${e.message}");
     }
   }
+
+  /// Shows or hides the hint stickers (translucent stickers projected on the background).
+  Future<void> setShowHint(bool enabled) async {
+    try {
+      await _channel.invokeMethod('setShowHint', {'enabled': enabled});
+    } on PlatformException catch (e) {
+      debugPrint("Error setting show hint: ${e.message}");
+    }
+  }
+
+  /// Sets sticker colours for all 6 faces.
+  /// [colors] must be 18 doubles: Rr,Rg,Rb, Lr,Lg,Lb, Ur,Ug,Ub, Dr,Dg,Db, Fr,Fg,Fb, Br,Bg,Bb.
+  Future<void> setFaceColors(List<double> colors) async {
+    assert(colors.length == 18);
+    try {
+      await _channel.invokeMethod('setFaceColors', {'colors': colors});
+    } on PlatformException catch (e) {
+      debugPrint("Error setting face colors: ${e.message}");
+    }
+  }
+
+  /// Sets the cubie body (foundation) opacity.
+  /// 0.3 = translucent (crystal), 1.0 = opaque black (normal).
+  Future<void> setBodyAlpha(double alpha) async {
+    try {
+      await _channel.invokeMethod('setBodyAlpha', {'alpha': alpha});
+    } on PlatformException catch (e) {
+      debugPrint("Error setting body alpha: ${e.message}");
+    }
+  }
+
+  /// Convenience: sets the cube to a pre-defined appearance.
+  /// Crystal = translucent body + hint stickers; Normal = opaque black body, no hints.
+  Future<void> setAppearance(TwizzleAppearance mode) async {
+    await setShowHint(mode == TwizzleAppearance.crystal);
+    await setBodyAlpha(mode == TwizzleAppearance.crystal ? 0.3 : 1.0);
+  }
 }
 
 /// A native 3D Rubik's Cube view widget rendered using OpenGL ES 3.0.
@@ -183,6 +228,8 @@ class TwizzleView extends StatelessWidget {
   final Map<String, double>? backgroundColor;
   final Map<String, double>? cameraPosition;
   final bool touchEnabled;
+  final List<double>? faceColors;
+  final double? bodyAlpha;
   final TwizzleViewCreatedCallback? onViewCreated;
   final VoidCallback? onTap;
 
@@ -193,6 +240,8 @@ class TwizzleView extends StatelessWidget {
     this.backgroundColor,
     this.cameraPosition,
     this.touchEnabled = true,
+    this.faceColors,
+    this.bodyAlpha,
     this.onViewCreated,
     this.onTap,
   });
@@ -207,6 +256,8 @@ class TwizzleView extends StatelessWidget {
       'touchEnabled': touchEnabled,
       if (backgroundColor != null) 'backgroundColor': backgroundColor,
       if (cameraPosition != null) 'cameraPosition': cameraPosition,
+      if (faceColors != null) 'faceColors': faceColors,
+      if (bodyAlpha != null) 'bodyAlpha': bodyAlpha,
     };
 
     if (defaultTargetPlatform == TargetPlatform.android) {

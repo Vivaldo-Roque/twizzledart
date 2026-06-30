@@ -173,4 +173,35 @@ Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeCurrentFraction(
     return g_renderer ? g_renderer->currentFraction() : 0.0f;
 }
 
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetShowHint(
+        JNIEnv*, jobject, jboolean enabled) {
+    if (g_renderer) g_renderer->setShowHint(enabled == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetBodyAlpha(
+        JNIEnv*, jobject, jfloat alpha) {
+    if (g_renderer) g_renderer->setBodyAlpha((float)alpha);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetFaceColors(
+        JNIEnv* env, jobject, jfloatArray colors) {
+    if (!g_renderer) return;
+    jsize len = env->GetArrayLength(colors);
+    if (len < 18) return;
+    jfloat* elems = env->GetFloatArrayElements(colors, nullptr);
+    if (!elems) return;
+    // elems layout: [Rr,Rg,Rb, Lr,Lg,Lb, Ur,Ug,Ub, Dr,Dg,Db, Fr,Fg,Fb, Br,Bg,Bb]
+    float faceColors[6][3];
+    for (int i = 0; i < 6; ++i) {
+        faceColors[i][0] = elems[i * 3 + 0];
+        faceColors[i][1] = elems[i * 3 + 1];
+        faceColors[i][2] = elems[i * 3 + 2];
+    }
+    env->ReleaseFloatArrayElements(colors, elems, JNI_ABORT);
+    g_renderer->setFaceColors(faceColors);
+}
+
 } // extern "C"

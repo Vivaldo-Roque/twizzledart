@@ -112,16 +112,18 @@ void CubeRenderer::render(float dt) {
     // ── Pass 1: Hint facelets (BackSide ≡ cull GL_FRONT) ───────────────────
     // Translucent — don't write depth, so it never blocks the real sticker
     // that gets drawn later in pass 3.
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDepthMask(GL_FALSE);
-    glCullFace(GL_FRONT);
+    if (showHint_) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        glCullFace(GL_FRONT);
 
-    for (int i = 0; i < (int)cubies_.size(); ++i) {
-        if (cubies_[i].hintCount == 0) continue;
-        glm::mat4 mvp = proj * view * animator_->modelMatrix(i);
-        shader_.setMat4("uMVP", mvp);
-        glDrawArrays(GL_TRIANGLES, cubies_[i].hintOffset, cubies_[i].hintCount);
+        for (int i = 0; i < (int)cubies_.size(); ++i) {
+            if (cubies_[i].hintCount == 0) continue;
+            glm::mat4 mvp = proj * view * animator_->modelMatrix(i);
+            shader_.setMat4("uMVP", mvp);
+            glDrawArrays(GL_TRIANGLES, cubies_[i].hintOffset, cubies_[i].hintCount);
+        }
     }
 
     // ── Pass 2: Foundation (translucent black, normal back-face cull) ──────
@@ -223,6 +225,26 @@ void CubeRenderer::setBackgroundColor(float r, float g, float b, float a) {
 
 void CubeRenderer::setCameraPosition(float latitude, float longitude, float radius) {
     camera_.setPosition(latitude, longitude, radius);
+}
+
+void CubeRenderer::setShowHint(bool show) {
+    showHint_ = show;
+}
+
+void CubeRenderer::setFaceColors(const float colors[6][3]) {
+    glm::vec3 glmColors[6];
+    for (int i = 0; i < 6; ++i) {
+        glmColors[i] = glm::vec3(colors[i][0], colors[i][1], colors[i][2]);
+    }
+    CubeGeometry::setFaceColors(glmColors);
+    CubeGeometry::build(vertices_, cubies_);
+    uploadGeometry();
+}
+
+void CubeRenderer::setBodyAlpha(float alpha) {
+    CubeGeometry::setBodyAlpha(alpha);
+    CubeGeometry::build(vertices_, cubies_);
+    uploadGeometry();
 }
 
 } // namespace twizzle::renderer

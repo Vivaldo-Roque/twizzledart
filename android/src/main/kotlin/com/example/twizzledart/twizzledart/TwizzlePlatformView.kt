@@ -57,6 +57,17 @@ class TwizzlePlatformView(
                 cubeView.setCameraPosition(lat, lon, rad)
             }
         }
+        creationParams?.get("faceColors")?.let {
+            if (it is List<*>) {
+                val floats = FloatArray(it.size) { i -> (it[i] as? Number)?.toFloat() ?: 0.0f }
+                cubeView.setFaceColors(floats)
+            }
+        }
+        creationParams?.get("bodyAlpha")?.let {
+            if (it is Number) {
+                cubeView.setBodyAlpha(it.toFloat())
+            }
+        }
     }
 
     override fun getView(): View {
@@ -143,6 +154,26 @@ class TwizzlePlatformView(
             "setTouchEnabled" -> {
                 val enabled = call.argument<Boolean>("enabled") ?: true
                 cubeView.touchEnabled = enabled
+                result.success(null)
+            }
+            "setShowHint" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: true
+                cubeView.setShowHint(enabled)
+                result.success(null)
+            }
+            "setFaceColors" -> {
+                val colors = call.argument<List<Double>>("colors")
+                if (colors != null && colors.size == 18) {
+                    val floats = FloatArray(18) { i -> colors[i].toFloat() }
+                    cubeView.setFaceColors(floats)
+                    result.success(null)
+                } else {
+                    result.error("INVALID_ARGUMENT", "colors must be a list of 18 doubles", null)
+                }
+            }
+            "setBodyAlpha" -> {
+                val alpha = call.argument<Double>("alpha")?.toFloat() ?: 0.3f
+                cubeView.setBodyAlpha(alpha)
                 result.success(null)
             }
             else -> {
