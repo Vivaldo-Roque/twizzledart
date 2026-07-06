@@ -213,24 +213,61 @@ class TwizzleViewController {
     }
   }
 
-  /// Convenience: sets the cube to a pre-defined appearance.
-  /// Crystal = translucent body + hint stickers; Normal = opaque black body, no hints.
+  /// Convenience: applies a pre-defined body appearance to the cube.
+  /// This only controls the cubie body opacity (bodyAlpha).
+  /// Use [setShowHint] separately to toggle hint stickers independently.
+  ///
+  /// - [TwizzleAppearance.crystal] → bodyAlpha = 0.3 (translucent)
+  /// - [TwizzleAppearance.normal]  → bodyAlpha = 1.0 (opaque black)
   Future<void> setAppearance(TwizzleAppearance mode) async {
-    await setShowHint(mode == TwizzleAppearance.crystal);
     await setBodyAlpha(mode == TwizzleAppearance.crystal ? 0.3 : 1.0);
   }
 }
 
 /// A native 3D Rubik's Cube view widget rendered using OpenGL ES 3.0.
 class TwizzleView extends StatelessWidget {
+  /// The initial sequence of moves (e.g., scramble or algorithm in WCA notation)
+  /// applied to the cube when the view is initialized.
   final String? initialAlgorithm;
+
+  /// The animation speed multiplier for cube rotations and move animations.
+  /// Defaults to `1.0`.
   final double speed;
+
+  /// The background color of the 3D scene, represented as a map with RGB keys.
+  /// Example: `{'r': 0.1, 'g': 0.1, 'b': 0.1}`.
   final Map<String, double>? backgroundColor;
+
+  /// Custom camera position configuration to control the viewing angle and distance.
   final Map<String, double>? cameraPosition;
+
+  /// Whether user touch gestures to rotate the cube or execute moves directly are enabled.
+  /// Defaults to `true`.
   final bool touchEnabled;
+
+  /// Sticker colors for all 6 faces of the cube.
+  /// Must contain exactly 18 doubles (R, G, B channels for each face):
+  /// `Rr, Rg, Rb, Lr, Lg, Lb, Ur, Ug, Ub, Dr, Dg, Db, Fr, Fg, Fb, Br, Bg, Bb`.
   final List<double>? faceColors;
+
+  /// The visual appearance style of the cube body.
+  /// Prefer this over the raw [bodyAlpha] parameter for clarity.
+  ///
+  /// - [TwizzleAppearance.crystal] → translucent body (bodyAlpha = 0.3)
+  /// - [TwizzleAppearance.normal]  → opaque black body (bodyAlpha = 1.0)
+  ///
+  /// If both [appearance] and [bodyAlpha] are provided, [appearance] takes precedence.
+  final TwizzleAppearance? appearance;
+
+  /// The raw opacity of the cubie body/foundation, from `0.0` (invisible) to `1.0` (fully opaque).
+  /// Only used when [appearance] is not set. Prefer [appearance] for standard use cases.
   final double? bodyAlpha;
+
+  /// Callback triggered once the native platform view is created.
+  /// Provides a [TwizzleViewController] to interact with the cube programmatically.
   final TwizzleViewCreatedCallback? onViewCreated;
+
+  /// Callback triggered when the 3D Rubik's cube view is tapped.
   final VoidCallback? onTap;
 
   const TwizzleView({
@@ -241,6 +278,7 @@ class TwizzleView extends StatelessWidget {
     this.cameraPosition,
     this.touchEnabled = true,
     this.faceColors,
+    this.appearance,
     this.bodyAlpha,
     this.onViewCreated,
     this.onTap,
@@ -257,7 +295,11 @@ class TwizzleView extends StatelessWidget {
       if (backgroundColor != null) 'backgroundColor': backgroundColor,
       if (cameraPosition != null) 'cameraPosition': cameraPosition,
       if (faceColors != null) 'faceColors': faceColors,
-      if (bodyAlpha != null) 'bodyAlpha': bodyAlpha,
+      // appearance takes precedence over raw bodyAlpha
+      if (appearance != null)
+        'bodyAlpha': appearance == TwizzleAppearance.crystal ? 0.3 : 1.0
+      else if (bodyAlpha != null)
+        'bodyAlpha': bodyAlpha,
     };
 
     if (defaultTargetPlatform == TargetPlatform.android) {

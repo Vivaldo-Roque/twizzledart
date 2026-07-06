@@ -126,7 +126,13 @@ void CubeRenderer::render(float dt) {
         }
     }
 
-    // ── Pass 2: Foundation (translucent black, normal back-face cull) ──────
+    // ── Pass 2: Foundation (translucent body, normal back-face cull) ───────
+    // Blend must be enabled here regardless of showHint_, because the
+    // foundation vertices carry alpha (e.g. 0.3 in crystal mode). Without
+    // blend the GPU ignores alpha and renders solid black.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
     glCullFace(GL_BACK);
     for (int i = 0; i < (int)cubies_.size(); ++i) {
         glm::mat4 mvp = proj * view * animator_->modelMatrix(i);

@@ -110,7 +110,7 @@ private:
     int   viewWidth_   = 1, viewHeight_ = 1;
 
     float bgR_ = 0.08f, bgG_ = 0.08f, bgB_ = 0.10f, bgA_ = 1.0f;
-    bool  showHint_ = true;
+    bool  showHint_ = false;
 
     bool  dragging_  = false;
     float lastDragX_ = 0, lastDragY_ = 0;
