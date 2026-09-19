@@ -78,6 +78,11 @@ std::vector<Move> AlgorithmParser::parse(const std::string& algStr) {
         Face face;
         bool wideMove = false;
 
+        if (faceChar == 'r' || faceChar == 'l' || faceChar == 'u' ||
+            faceChar == 'd' || faceChar == 'f' || faceChar == 'b') {
+            wideMove = true;
+        }
+
         switch (std::toupper(faceChar)) {
             case 'R': face = Face::R; break;
             case 'L': face = Face::L; break;
@@ -115,7 +120,7 @@ std::vector<Move> AlgorithmParser::parse(const std::string& algStr) {
                 numTurns = 2;
                 ++idx;
             } else if (c == '\'') {
-                dir = (numTurns == 2) ? Direction::DOUBLE : Direction::CCW;
+                dir = (numTurns == 2) ? Direction::DOUBLE_CCW : Direction::CCW;
                 ++idx;
             } else {
                 ++idx; // unexpected, skip
@@ -126,34 +131,19 @@ std::vector<Move> AlgorithmParser::parse(const std::string& algStr) {
             dir = Direction::DOUBLE;
         }
 
-        // Wide move: emit face move + corresponding slice
+        // Wide move: emit single wide move face (e.g. Rw, Lw) so both layers animate simultaneously
         if (wideMove) {
-            moves.push_back({face, dir});
-            Face slice;
-            Direction sliceDir = dir;
+            Face wideFace = face;
             switch (face) {
-                case Face::R: slice = Face::M;
-                    // Rw = R + M'  → slice is opposite
-                    sliceDir = (dir == Direction::CW)  ? Direction::CCW  :
-                               (dir == Direction::CCW) ? Direction::CW   :
-                                                         Direction::DOUBLE;
-                    break;
-                case Face::L: slice = Face::M;    break;
-                case Face::U: slice = Face::E;
-                    sliceDir = (dir == Direction::CW)  ? Direction::CCW  :
-                               (dir == Direction::CCW) ? Direction::CW   :
-                                                         Direction::DOUBLE;
-                    break;
-                case Face::D: slice = Face::E;    break;
-                case Face::F: slice = Face::S;    break;
-                case Face::B: slice = Face::S;
-                    sliceDir = (dir == Direction::CW)  ? Direction::CCW  :
-                               (dir == Direction::CCW) ? Direction::CW   :
-                                                         Direction::DOUBLE;
-                    break;
-                default:      slice = face;       break;
+                case Face::R: wideFace = Face::Rw; break;
+                case Face::L: wideFace = Face::Lw; break;
+                case Face::U: wideFace = Face::Uw; break;
+                case Face::D: wideFace = Face::Dw; break;
+                case Face::F: wideFace = Face::Fw; break;
+                case Face::B: wideFace = Face::Bw; break;
+                default:      wideFace = face;     break;
             }
-            moves.push_back({slice, sliceDir});
+            moves.push_back({wideFace, dir});
         } else {
             moves.push_back({face, dir});
         }
@@ -172,9 +162,10 @@ std::vector<Move> AlgorithmParser::inverse(const std::vector<Move>& moves) {
     for (auto it = moves.rbegin(); it != moves.rend(); ++it) {
         Direction newDir = Direction::CW;
         switch (it->dir) {
-            case Direction::CW:     newDir = Direction::CCW;    break;
-            case Direction::CCW:    newDir = Direction::CW;     break;
-            case Direction::DOUBLE: newDir = Direction::DOUBLE; break;
+            case Direction::CW:         newDir = Direction::CCW;        break;
+            case Direction::CCW:        newDir = Direction::CW;         break;
+            case Direction::DOUBLE:     newDir = Direction::DOUBLE_CCW; break;
+            case Direction::DOUBLE_CCW: newDir = Direction::DOUBLE;     break;
         }
         inv.push_back({it->face, newDir});
     }
@@ -203,11 +194,18 @@ std::string AlgorithmParser::toString(const std::vector<Move>& moves) {
             case Face::X: oss << 'x'; break;
             case Face::Y: oss << 'y'; break;
             case Face::Z: oss << 'z'; break;
+            case Face::Rw: oss << "Rw"; break;
+            case Face::Lw: oss << "Lw"; break;
+            case Face::Uw: oss << "Uw"; break;
+            case Face::Dw: oss << "Dw"; break;
+            case Face::Fw: oss << "Fw"; break;
+            case Face::Bw: oss << "Bw"; break;
         }
         switch (m.dir) {
-            case Direction::CW:     break;
-            case Direction::CCW:    oss << '\''; break;
-            case Direction::DOUBLE: oss << '2';  break;
+            case Direction::CW:         break;
+            case Direction::CCW:        oss << '\''; break;
+            case Direction::DOUBLE:     oss << '2';  break;
+            case Direction::DOUBLE_CCW: oss << "2'"; break;
         }
     }
     return oss.str();

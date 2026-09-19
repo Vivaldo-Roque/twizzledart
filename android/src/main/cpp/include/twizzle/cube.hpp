@@ -11,14 +11,16 @@ namespace twizzle {
 enum class Face : uint8_t {
     R = 0, L = 1, U = 2, D = 3, F = 4, B = 5,  ///< Face moves
     M = 6, E = 7, S = 8,                       ///< Slice moves
-    X = 9, Y = 10, Z = 11                      ///< Whole cube rotations
+    X = 9, Y = 10, Z = 11,                     ///< Whole cube rotations
+    Rw = 12, Lw = 13, Uw = 14, Dw = 15, Fw = 16, Bw = 17 ///< Wide moves
 };
 
 /// Quarter/half turn direction.
 enum class Direction : int8_t {
-    CW     =  1,  ///< Clockwise, no suffix (e.g. `R`)
-    DOUBLE =  2,  ///< Half turn (e.g. `R2`)
-    CCW    = -1   ///< Counter-clockwise, prime (e.g. `R'`)
+    CW         =  1,  ///< Clockwise, no suffix (e.g. `R`)
+    DOUBLE     =  2,  ///< Half turn (e.g. `R2`)
+    CCW        = -1,  ///< Counter-clockwise, prime (e.g. `R'`)
+    DOUBLE_CCW = -2   ///< Half turn counter-clockwise (e.g. `R2'`)
 };
 
 /// A single move: which face/slice/rotation, and how far to turn it.

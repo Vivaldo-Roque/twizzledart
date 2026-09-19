@@ -8,6 +8,13 @@
 namespace twizzle::renderer {
 using namespace twizzle;
 
+inline bool affectsCubie(int sliceSign, int coord) {
+    if (sliceSign == 9) return true;         // Whole cube
+    if (sliceSign == 10) return coord >= 0;  // Wide positive (outer + middle)
+    if (sliceSign == -10) return coord <= 0; // Wide negative (outer + middle)
+    return coord == sliceSign;               // Single layer
+}
+
 // Move → rotation params (axis + angle), right-hand rule per face.
 MoveParams paramsForMove(const Move& move) {
     MoveParams p; p.sliceSign = 0; p.sliceAxis = 0;
@@ -26,12 +33,20 @@ MoveParams paramsForMove(const Move& move) {
     case Face::X: p.axis={1,0,0}; base=-glm::radians(90.f); p.sliceAxis=0; p.sliceSign= 9; break;
     case Face::Y: p.axis={0,1,0}; base=-glm::radians(90.f); p.sliceAxis=1; p.sliceSign= 9; break;
     case Face::Z: p.axis={0,0,1}; base=-glm::radians(90.f); p.sliceAxis=2; p.sliceSign= 9; break;
+    // Wide moves: rotate outer face + middle slice simultaneously
+    case Face::Rw: p.axis={1,0,0}; base=-glm::radians(90.f); p.sliceAxis=0; p.sliceSign= 10; break;
+    case Face::Lw: p.axis={1,0,0}; base=+glm::radians(90.f); p.sliceAxis=0; p.sliceSign=-10; break;
+    case Face::Uw: p.axis={0,1,0}; base=-glm::radians(90.f); p.sliceAxis=1; p.sliceSign= 10; break;
+    case Face::Dw: p.axis={0,1,0}; base=+glm::radians(90.f); p.sliceAxis=1; p.sliceSign=-10; break;
+    case Face::Fw: p.axis={0,0,1}; base=-glm::radians(90.f); p.sliceAxis=2; p.sliceSign= 10; break;
+    case Face::Bw: p.axis={0,0,1}; base=+glm::radians(90.f); p.sliceAxis=2; p.sliceSign=-10; break;
     default: p.axis={1,0,0}; break;
     }
 
     float mult = 1.0f;
     if (move.dir == Direction::CCW)    mult = -1.0f;
     if (move.dir == Direction::DOUBLE) mult =  2.0f;
+    if (move.dir == Direction::DOUBLE_CCW) mult = -2.0f;
     p.totalAngle = base * mult;
     return p;
 }
@@ -70,7 +85,7 @@ void MoveAnimator::recomputeCheckpoints() {
             int coord = (p.sliceAxis==0) ? curGrid[i].x
                        : (p.sliceAxis==1) ? curGrid[i].y
                                           : curGrid[i].z;
-            if (p.sliceSign == 9 || coord == p.sliceSign) {
+            if (affectsCubie(p.sliceSign, coord)) {
                 curMat[i]  = rot * curMat[i];
                 glm::vec4 np = rot * glm::vec4(glm::vec3(curGrid[i]), 1.0f);
                 curGrid[i] = glm::ivec3(glm::round(glm::vec3(np)));
@@ -99,7 +114,7 @@ void MoveAnimator::appendMove(const Move& move) {
         glm::vec3 pos = glm::vec3(prev[i][3]); // translation column
         glm::ivec3 grid = glm::ivec3(glm::round(pos));
         int coord = (p.sliceAxis==0) ? grid.x : (p.sliceAxis==1) ? grid.y : grid.z;
-        if (p.sliceSign == 9 || coord == p.sliceSign) {
+        if (affectsCubie(p.sliceSign, coord)) {
             next[i] = rot * prev[i];
         }
     }
@@ -191,7 +206,7 @@ glm::mat4 MoveAnimator::modelMatrix(int index) const {
     glm::vec3 pos  = glm::vec3(base[3]);
     glm::ivec3 grid = glm::ivec3(glm::round(pos));
     int coord = (p.sliceAxis==0) ? grid.x : (p.sliceAxis==1) ? grid.y : grid.z;
-    bool affected = (p.sliceSign == 9 || coord == p.sliceSign);
+    bool affected = affectsCubie(p.sliceSign, coord);
     if (!affected) return base;
 
     float eased = smootherStep(t);

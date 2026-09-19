@@ -227,7 +227,7 @@ void Cube3x3::moveZ() {
 
 void Cube3x3::applyMove(const Move& move) {
     int times = 1;
-    if (move.dir == Direction::DOUBLE) times = 2;
+    if (move.dir == Direction::DOUBLE || move.dir == Direction::DOUBLE_CCW) times = 2;
     else if (move.dir == Direction::CCW) times = 3;
 
     for (int i = 0; i < times; ++i) {
@@ -244,6 +244,12 @@ void Cube3x3::applyMove(const Move& move) {
             case Face::X: moveX(); break;
             case Face::Y: moveY(); break;
             case Face::Z: moveZ(); break;
+            case Face::Rw: moveR(); for (int j = 0; j < 3; ++j) moveM(); break;
+            case Face::Lw: moveL(); moveM(); break;
+            case Face::Uw: moveU(); for (int j = 0; j < 3; ++j) moveE(); break;
+            case Face::Dw: moveD(); moveE(); break;
+            case Face::Fw: moveF(); moveS(); break;
+            case Face::Bw: moveB(); for (int j = 0; j < 3; ++j) moveS(); break;
             default: break;
         }
     }
