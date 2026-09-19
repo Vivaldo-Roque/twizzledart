@@ -179,6 +179,11 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
         return renderer.nativeCurrentFraction()
     }
 
+    fun setPitchLock(locked: Boolean) {
+        renderer.cachedPitchLock = locked
+        queueEvent { renderer.nativeSetPitchLock(locked) }
+    }
+
     // ── Lifecycle ──────────────────────────────────────────────────────────
 
     override fun onPause() {
@@ -199,6 +204,7 @@ class TwizzleRenderer : GLSurfaceView.Renderer {
     var cachedShowHint: Boolean? = null
     var cachedFaceColors: FloatArray? = null
     var cachedBodyAlpha: Float? = null
+    var cachedPitchLock: Boolean? = null
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         nativeOnSurfaceCreated()
@@ -218,6 +224,9 @@ class TwizzleRenderer : GLSurfaceView.Renderer {
         }
         cachedBodyAlpha?.let {
             nativeSetBodyAlpha(it)
+        }
+        cachedPitchLock?.let {
+            nativeSetPitchLock(it)
         }
     }
 
@@ -259,6 +268,7 @@ class TwizzleRenderer : GLSurfaceView.Renderer {
     external fun nativeSetShowHint(enabled: Boolean)
     external fun nativeSetFaceColors(colors: FloatArray)
     external fun nativeSetBodyAlpha(alpha: Float)
+    external fun nativeSetPitchLock(locked: Boolean)
 
     companion object {
         init { System.loadLibrary("twizzle") }

@@ -82,6 +82,9 @@ public:
 
     /// Sets the OrbitCamera position.
     void setCameraPosition(float latitude, float longitude, float radius);
+    
+    /// Sets whether the camera pitch is locked to [-89, 89] degrees.
+    void setPitchLock(bool locked);
 
     /// Toggles rendering of the hint stickers.
     void setShowHint(bool show);

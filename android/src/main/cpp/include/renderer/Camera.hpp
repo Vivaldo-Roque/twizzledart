@@ -40,12 +40,16 @@ public:
     glm::mat4 projection() const;
     glm::vec3 position()   const;
 
+    /// Sets whether vertical rotation is restricted to [-89, 89] degrees.
+    void setPitchLock(bool locked);
+
     float zoomSensitivity = 0.3f;
     float minRadius       = 3.0f;
     float maxRadius       = 14.0f;
 
 private:
-    float latitude_;   ///< degrees, clamped to [-89, 89]
+    bool  pitchLock_ = true;
+    float latitude_;   ///< degrees, clamped if pitchLock_ is true
     float longitude_;  ///< degrees
     float radius_;
     int   width_, height_;

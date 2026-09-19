@@ -183,6 +183,16 @@ class TwizzleViewController {
     }
   }
 
+  /// Sets whether the camera pitch is locked to [-89, 89] degrees.
+  /// If false, allows free 360-degree rotation across all axes.
+  Future<void> setPitchLock(bool locked) async {
+    try {
+      await _channel.invokeMethod('setPitchLock', {'locked': locked});
+    } on PlatformException catch (e) {
+      debugPrint("Error setting pitch lock: ${e.message}");
+    }
+  }
+
   /// Shows or hides the hint stickers (translucent stickers projected on the background).
   Future<void> setShowHint(bool enabled) async {
     try {
@@ -262,6 +272,10 @@ class TwizzleView extends StatelessWidget {
   /// The raw opacity of the cubie body/foundation, from `0.0` (invisible) to `1.0` (fully opaque).
   /// Only used when [appearance] is not set. Prefer [appearance] for standard use cases.
   final double? bodyAlpha;
+  
+  /// Whether vertical rotation (pitch) is restricted to [-89, 89] degrees.
+  /// Defaults to `true`. If `false`, the cube can be rotated completely upside down.
+  final bool pitchLock;
 
   /// Callback triggered once the native platform view is created.
   /// Provides a [TwizzleViewController] to interact with the cube programmatically.
@@ -277,6 +291,7 @@ class TwizzleView extends StatelessWidget {
     this.backgroundColor,
     this.cameraPosition,
     this.touchEnabled = true,
+    this.pitchLock = true,
     this.faceColors,
     this.appearance,
     this.bodyAlpha,
@@ -292,6 +307,7 @@ class TwizzleView extends StatelessWidget {
       if (initialAlgorithm != null) 'initialAlgorithm': initialAlgorithm,
       'speed': speed,
       'touchEnabled': touchEnabled,
+      'pitchLock': pitchLock,
       if (backgroundColor != null) 'backgroundColor': backgroundColor,
       if (cameraPosition != null) 'cameraPosition': cameraPosition,
       if (faceColors != null) 'faceColors': faceColors,

@@ -68,6 +68,11 @@ class TwizzlePlatformView(
                 cubeView.setBodyAlpha(it.toFloat())
             }
         }
+        creationParams?.get("pitchLock")?.let {
+            if (it is Boolean) {
+                cubeView.setPitchLock(it)
+            }
+        }
     }
 
     override fun getView(): View {
@@ -174,6 +179,11 @@ class TwizzlePlatformView(
             "setBodyAlpha" -> {
                 val alpha = call.argument<Double>("alpha")?.toFloat() ?: 0.3f
                 cubeView.setBodyAlpha(alpha)
+                result.success(null)
+            }
+            "setPitchLock" -> {
+                val locked = call.argument<Boolean>("locked") ?: true
+                cubeView.setPitchLock(locked)
                 result.success(null)
             }
             else -> {

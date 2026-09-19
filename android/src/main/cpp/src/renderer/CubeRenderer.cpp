@@ -253,4 +253,7 @@ void CubeRenderer::setBodyAlpha(float alpha) {
     uploadGeometry();
 }
 
+    void CubeRenderer::setPitchLock(bool locked) { camera_.setPitchLock(locked); }
+
 } // namespace twizzle::renderer
+
