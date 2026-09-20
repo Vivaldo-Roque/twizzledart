@@ -99,16 +99,6 @@ static WGPUAdapter requestAdapterSync(WGPUInstance instance,
             if (status != WGPURequestAdapterStatus_Success || !adapter) {
                 TW_LOGE("wgpuInstanceRequestAdapter failed (status=0x%x): %s",
                         (unsigned)status, msg ? msg : "unknown reason");
-            } else {
-                WGPUAdapterInfo info = {};
-                wgpuAdapterGetInfo(adapter, &info);
-                TW_LOGI("wgpu Adapter acquired: device='%s' vendor='%s' desc='%s' backend=0x%x type=0x%x",
-                        info.device ? info.device : "(null)",
-                        info.vendor ? info.vendor : "(null)",
-                        info.description ? info.description : "(null)",
-                        (unsigned)info.backendType,
-                        (unsigned)info.adapterType);
-                wgpuAdapterInfoFreeMembers(info);
             }
         }, &res);
 
@@ -132,8 +122,6 @@ static WGPUDevice requestDeviceSync(WGPUAdapter adapter) {
             if (status != WGPURequestDeviceStatus_Success || !device) {
                 TW_LOGE("wgpuAdapterRequestDevice failed (status=0x%x): %s",
                         (unsigned)status, msg ? msg : "unknown reason");
-            } else {
-                TW_LOGI("wgpu Device created successfully");
             }
         }, &res);
 
@@ -156,14 +144,16 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
     if (initialized_) return true;
 
 #if defined(__ANDROID__)
-    wgpuSetLogLevel(WGPULogLevel_Info);
-    wgpuSetLogCallback([](WGPULogLevel level, const char* msg, void*) {
-        int priority = ANDROID_LOG_INFO;
-        if (level == WGPULogLevel_Error) priority = ANDROID_LOG_ERROR;
-        else if (level == WGPULogLevel_Warn)  priority = ANDROID_LOG_WARN;
-        else if (level == WGPULogLevel_Debug) priority = ANDROID_LOG_DEBUG;
-        __android_log_print(priority, "TwizzleWGPU", "[wgpu %d] %s", (int)level, msg);
-    }, nullptr);
+    wgpuSetLogLevel(debugLogs_ ? WGPULogLevel_Info : WGPULogLevel_Off);
+    wgpuSetLogCallback([](WGPULogLevel level, const char* msg, void* ud) {
+        auto* self = reinterpret_cast<WebGpuRenderer*>(ud);
+        if (self && self->debugLogs_) {
+            int priority = ANDROID_LOG_DEBUG;
+            if (level == WGPULogLevel_Error) priority = ANDROID_LOG_ERROR;
+            else if (level == WGPULogLevel_Warn)  priority = ANDROID_LOG_WARN;
+            __android_log_print(priority, "TwizzleWGPU", "[wgpu %d] %s", (int)level, msg);
+        }
+    }, this);
 #endif
 
     width_  = desc.width;
@@ -280,9 +270,6 @@ void WebGpuRenderer::configureSurface() {
     cfg.presentMode = WGPUPresentMode_Fifo; // VSync
     cfg.alphaMode   = WGPUCompositeAlphaMode_Auto; // Reverted to avoid Android crash
     wgpuSurfaceConfigure(surface_, &cfg);
-
-    TW_LOGI("Surface configured: size=%ux%u format=0x%x capsFormatCount=%u",
-            width_, height_, (unsigned)fmt, (unsigned)caps.formatCount);
 
 #if defined(__ANDROID__)
     if (debugLogs_) {
@@ -597,21 +584,11 @@ void WebGpuRenderer::render(float dt) {
     WGPUSurfaceTexture st = {};
     wgpuSurfaceGetCurrentTexture(surface_, &st);
     if (st.status != WGPUSurfaceGetCurrentTextureStatus_Success) {
-        static int s_failCount = 0;
-        if (++s_failCount <= 5 || s_failCount % 60 == 0) {
-            TW_LOGW("wgpuSurfaceGetCurrentTexture failed: status=0x%x (fail #%d)", (unsigned)st.status, s_failCount);
-        }
         if (st.status == WGPUSurfaceGetCurrentTextureStatus_Outdated ||
             st.status == WGPUSurfaceGetCurrentTextureStatus_Lost) {
-            TW_LOGI("Surface outdated or lost (status=0x%x), reconfiguring...", (unsigned)st.status);
             configureSurface();
         }
         return;
-    }
-
-    static int s_renderedFrames = 0;
-    if (++s_renderedFrames <= 3 || s_renderedFrames % 300 == 0) {
-        TW_LOGI("Frame %d rendered successfully (%ux%u)", s_renderedFrames, width_, height_);
     }
 
     WGPUTextureView backbuffer = wgpuTextureCreateView(st.texture, nullptr);
@@ -862,8 +839,12 @@ void WebGpuRenderer::setCameraPosition(float lat, float lon, float radius)
     { camera_.setPosition(lat, lon, radius); }
 void WebGpuRenderer::setPitchLock(bool locked)
     { camera_.setPitchLock(locked); }
-void WebGpuRenderer::setShowHint(bool show)    { showHint_ = show; }
-void WebGpuRenderer::setDebugLogs(bool enabled) { debugLogs_ = enabled; }
+void WebGpuRenderer::setDebugLogs(bool enabled) {
+    debugLogs_ = enabled;
+#if defined(__ANDROID__)
+    wgpuSetLogLevel(enabled ? WGPULogLevel_Info : WGPULogLevel_Off);
+#endif
+}
 
 void WebGpuRenderer::setFaceColors(const float colors[6][3]) {
     glm::vec3 c[6];
