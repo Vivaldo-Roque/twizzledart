@@ -42,10 +42,12 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
             override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
                 lastSpan = d.currentSpan; return true
             }
-            override fun onScale(d: ScaleGestureDetector): Boolean {
-                val delta = (d.currentSpan - lastSpan) * 0.01f
-                queueEvent { renderer.nativeOnZoom(-delta) }
-                lastSpan = d.currentSpan
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val delta = (detector.currentSpan - lastSpan) * 0.01f
+                if (delta != 0f) {
+                    queueEvent { renderer.nativeOnZoom(delta) }
+                }
+                lastSpan = detector.currentSpan
                 return true
             }
         })
@@ -61,6 +63,8 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
     }
 
     // ── Input ──────────────────────────────────────────────────────────────
+
+    private var wasScaling = false
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (!touchEnabled) {
@@ -90,15 +94,22 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
 
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                wasScaling = false
                 pointerCount = e.pointerCount
                 lastTouchX   = e.x
                 lastTouchY   = e.y
             }
             MotionEvent.ACTION_MOVE -> {
-                if (!scaleDetector.isInProgress && e.pointerCount == 1) {
-                    val dx = e.x - lastTouchX
-                    val dy = e.y - lastTouchY
-                    queueEvent { renderer.nativeOnDrag(dx, dy) }
+                if (scaleDetector.isInProgress) {
+                    wasScaling = true
+                } else if (e.pointerCount == 1) {
+                    if (wasScaling) {
+                        wasScaling = false
+                    } else {
+                        val dx = e.x - lastTouchX
+                        val dy = e.y - lastTouchY
+                        queueEvent { renderer.nativeOnDrag(dx, dy) }
+                    }
                 }
                 lastTouchX = e.x
                 lastTouchY = e.y
