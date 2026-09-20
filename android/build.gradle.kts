@@ -50,9 +50,23 @@ android {
     }
 
     defaultConfig {
-        minSdk = 24
+        // wgpu-native Vulkan backend requires Android API 26+
+        // (VK_KHR_surface + VkSurfaceKHR available since API 26)
+        minSdk = 26
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            // armeabi-v7a dropped: 32-bit ARM has no Vulkan support on most devices.
+            // x86 dropped: emulator-only, not relevant for production.
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+        externalNativeBuild {
+            cmake {
+                arguments(
+                    "-DANDROID_STL=c++_shared",  // shared STL for wgpu-native
+                    "-DANDROID_PLATFORM=android-26",
+                    "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+                )
+                cppFlags("-std=c++20")
+            }
         }
     }
 

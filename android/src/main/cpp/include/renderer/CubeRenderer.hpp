@@ -112,7 +112,7 @@ private:
     float startTime_   = 0.0f;
     int   viewWidth_   = 1, viewHeight_ = 1;
 
-    float bgR_ = 0.08f, bgG_ = 0.08f, bgB_ = 0.10f, bgA_ = 1.0f;
+    float bgR_ = 0.91f, bgG_ = 0.91f, bgB_ = 0.93f, bgA_ = 1.0f;
     bool  showHint_ = false;
 
     bool  dragging_  = false;

@@ -1,30 +1,24 @@
 import 'package:flutter/material.dart';
-import 'package:twizzledart/twizzledart.dart';
+import 'anim_cube/anim_cube.dart';
 
 void main() {
   runApp(const MyApp());
 }
 
-class MyApp extends StatefulWidget {
+class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
-  State<MyApp> createState() => _MyAppState();
-}
-
-class _MyAppState extends State<MyApp> {
-  @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      home: Scaffold(
-        appBar: AppBar(title: const Text('TwizzleDart Example')),
-        body: const Center(
-          child: SizedBox(
-            width: 300,
-            height: 300,
-            child: TwizzleView(),
-          ),
-        ),
+      title: 'TwizzleDart Example',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        useMaterial3: true,
+      ),
+      home: const AnimCube(
+        moves: "R U R' U'",
+        alg: "R U R' U R U2 R'", // Sune example
       ),
     );
   }
