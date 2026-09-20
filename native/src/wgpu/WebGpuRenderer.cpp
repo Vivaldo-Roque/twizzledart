@@ -16,6 +16,15 @@
 #include <wgpu/wgpu.h>
 #if defined(__ANDROID__)
 #include <android/log.h>
+#define TW_LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "TwizzleWGPU", __VA_ARGS__)
+#define TW_LOGW(...) __android_log_print(ANDROID_LOG_WARN,  "TwizzleWGPU", __VA_ARGS__)
+#define TW_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "TwizzleWGPU", __VA_ARGS__)
+#define TW_LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "TwizzleWGPU", __VA_ARGS__)
+#else
+#define TW_LOGI(...) (std::fprintf(stdout, "[TwizzleWGPU] " __VA_ARGS__), std::fprintf(stdout, "\n"))
+#define TW_LOGW(...) (std::fprintf(stderr, "[TwizzleWGPU WARN] " __VA_ARGS__), std::fprintf(stderr, "\n"))
+#define TW_LOGE(...) (std::fprintf(stderr, "[TwizzleWGPU ERROR] " __VA_ARGS__), std::fprintf(stderr, "\n"))
+#define TW_LOGD(...) (std::fprintf(stdout, "[TwizzleWGPU DEBUG] " __VA_ARGS__), std::fprintf(stdout, "\n"))
 #endif
 
 // Embed the WGSL shader source as a C string literal.
@@ -83,10 +92,24 @@ static WGPUAdapter requestAdapterSync(WGPUInstance instance,
     opts.powerPreference   = WGPUPowerPreference_HighPerformance;
 
     wgpuInstanceRequestAdapter(instance, &opts,
-        [](WGPURequestAdapterStatus, WGPUAdapter adapter, const char*, void* ud) {
+        [](WGPURequestAdapterStatus status, WGPUAdapter adapter, const char* msg, void* ud) {
             auto* r = reinterpret_cast<Result*>(ud);
             r->adapter = adapter;
             r->done    = true;
+            if (status != WGPURequestAdapterStatus_Success || !adapter) {
+                TW_LOGE("wgpuInstanceRequestAdapter failed (status=0x%x): %s",
+                        (unsigned)status, msg ? msg : "unknown reason");
+            } else {
+                WGPUAdapterInfo info = {};
+                wgpuAdapterGetInfo(adapter, &info);
+                TW_LOGI("wgpu Adapter acquired: device='%s' vendor='%s' desc='%s' backend=0x%x type=0x%x",
+                        info.device ? info.device : "(null)",
+                        info.vendor ? info.vendor : "(null)",
+                        info.description ? info.description : "(null)",
+                        (unsigned)info.backendType,
+                        (unsigned)info.adapterType);
+                wgpuAdapterInfoFreeMembers(info);
+            }
         }, &res);
 
     // wgpu-native processes the callback synchronously on this thread.
@@ -102,10 +125,16 @@ static WGPUDevice requestDeviceSync(WGPUAdapter adapter) {
     desc.label = "TwizzleDevice";
 
     wgpuAdapterRequestDevice(adapter, &desc,
-        [](WGPURequestDeviceStatus, WGPUDevice device, const char*, void* ud) {
+        [](WGPURequestDeviceStatus status, WGPUDevice device, const char* msg, void* ud) {
             auto* r = reinterpret_cast<Result*>(ud);
             r->device = device;
             r->done   = true;
+            if (status != WGPURequestDeviceStatus_Success || !device) {
+                TW_LOGE("wgpuAdapterRequestDevice failed (status=0x%x): %s",
+                        (unsigned)status, msg ? msg : "unknown reason");
+            } else {
+                TW_LOGI("wgpu Device created successfully");
+            }
         }, &res);
 
     assert(res.done && "Device request did not complete synchronously");
@@ -127,9 +156,13 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
     if (initialized_) return true;
 
 #if defined(__ANDROID__)
-    wgpuSetLogLevel(WGPULogLevel_Error);
+    wgpuSetLogLevel(WGPULogLevel_Info);
     wgpuSetLogCallback([](WGPULogLevel level, const char* msg, void*) {
-        __android_log_print(ANDROID_LOG_ERROR, "TwizzleWGPU", "[wgpu %d] %s", level, msg);
+        int priority = ANDROID_LOG_INFO;
+        if (level == WGPULogLevel_Error) priority = ANDROID_LOG_ERROR;
+        else if (level == WGPULogLevel_Warn)  priority = ANDROID_LOG_WARN;
+        else if (level == WGPULogLevel_Debug) priority = ANDROID_LOG_DEBUG;
+        __android_log_print(priority, "TwizzleWGPU", "[wgpu %d] %s", (int)level, msg);
     }, nullptr);
 #endif
 
@@ -247,6 +280,9 @@ void WebGpuRenderer::configureSurface() {
     cfg.presentMode = WGPUPresentMode_Fifo; // VSync
     cfg.alphaMode   = WGPUCompositeAlphaMode_Auto; // Reverted to avoid Android crash
     wgpuSurfaceConfigure(surface_, &cfg);
+
+    TW_LOGI("Surface configured: size=%ux%u format=0x%x capsFormatCount=%u",
+            width_, height_, (unsigned)fmt, (unsigned)caps.formatCount);
 
 #if defined(__ANDROID__)
     if (debugLogs_) {
@@ -560,7 +596,23 @@ void WebGpuRenderer::render(float dt) {
     // ── Acquire swap-chain texture ──────────────────────────────────────
     WGPUSurfaceTexture st = {};
     wgpuSurfaceGetCurrentTexture(surface_, &st);
-    if (st.status != WGPUSurfaceGetCurrentTextureStatus_Success) return;
+    if (st.status != WGPUSurfaceGetCurrentTextureStatus_Success) {
+        static int s_failCount = 0;
+        if (++s_failCount <= 5 || s_failCount % 60 == 0) {
+            TW_LOGW("wgpuSurfaceGetCurrentTexture failed: status=0x%x (fail #%d)", (unsigned)st.status, s_failCount);
+        }
+        if (st.status == WGPUSurfaceGetCurrentTextureStatus_Outdated ||
+            st.status == WGPUSurfaceGetCurrentTextureStatus_Lost) {
+            TW_LOGI("Surface outdated or lost (status=0x%x), reconfiguring...", (unsigned)st.status);
+            configureSurface();
+        }
+        return;
+    }
+
+    static int s_renderedFrames = 0;
+    if (++s_renderedFrames <= 3 || s_renderedFrames % 300 == 0) {
+        TW_LOGI("Frame %d rendered successfully (%ux%u)", s_renderedFrames, width_, height_);
+    }
 
     WGPUTextureView backbuffer = wgpuTextureCreateView(st.texture, nullptr);
 
