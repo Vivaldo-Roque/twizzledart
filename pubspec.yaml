@@ -1,6 +1,6 @@
 name: twizzledart
-description: "A new Flutter plugin project."
-version: 0.0.1
+description: "Interactive 3D Rubik's Cube Flutter plugin powered by WebGPU (Vulkan/Metal/DirectX)."
+version: 0.1.0
 homepage:
 
 environment:
@@ -36,6 +36,13 @@ flutter:
     platforms:
       android:
         package: com.example.twizzledart.twizzledart
+        pluginClass: TwizzledartPlugin
+      windows:
+        pluginClass: TwizzledartPlugin
+        fileName: twizzledart_plugin.h
+      ios:
+        pluginClass: TwizzledartPlugin
+      macos:
         pluginClass: TwizzledartPlugin
 
   # To add assets to your plugin package, add an assets section, like this:

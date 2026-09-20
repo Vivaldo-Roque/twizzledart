@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -184,7 +186,6 @@ class TwizzleViewController {
   }
 
   /// Sets whether the camera pitch is locked to [-89, 89] degrees.
-  /// If false, allows free 360-degree rotation across all axes.
   Future<void> setPitchLock(bool locked) async {
     try {
       await _channel.invokeMethod('setPitchLock', {'locked': locked});
@@ -193,7 +194,16 @@ class TwizzleViewController {
     }
   }
 
-  /// Shows or hides the hint stickers (translucent stickers projected on the background).
+  /// Enables or disables native debug logs.
+  Future<void> setDebugLogs(bool enabled) async {
+    try {
+      await _channel.invokeMethod('setDebugLogs', {'enabled': enabled});
+    } on PlatformException catch (e) {
+      debugPrint("Error setting debug logs: ${e.message}");
+    }
+  }
+
+  /// Shows or hides the hint stickers.
   Future<void> setShowHint(bool enabled) async {
     try {
       await _channel.invokeMethod('setShowHint', {'enabled': enabled});
@@ -202,8 +212,7 @@ class TwizzleViewController {
     }
   }
 
-  /// Sets sticker colours for all 6 faces.
-  /// [colors] must be 18 doubles: Rr,Rg,Rb, Lr,Lg,Lb, Ur,Ug,Ub, Dr,Dg,Db, Fr,Fg,Fb, Br,Bg,Bb.
+  /// Sets sticker colours for all 6 faces (18 doubles: R,G,B per face).
   Future<void> setFaceColors(List<double> colors) async {
     assert(colors.length == 18);
     try {
@@ -213,8 +222,7 @@ class TwizzleViewController {
     }
   }
 
-  /// Sets the cubie body (foundation) opacity.
-  /// 0.3 = translucent (crystal), 1.0 = opaque black (normal).
+  /// Sets the cubie body (foundation) opacity. 0.3 = crystal, 1.0 = normal.
   Future<void> setBodyAlpha(double alpha) async {
     try {
       await _channel.invokeMethod('setBodyAlpha', {'alpha': alpha});
@@ -224,17 +232,160 @@ class TwizzleViewController {
   }
 
   /// Convenience: applies a pre-defined body appearance to the cube.
-  /// This only controls the cubie body opacity (bodyAlpha).
-  /// Use [setShowHint] separately to toggle hint stickers independently.
-  ///
-  /// - [TwizzleAppearance.crystal] → bodyAlpha = 0.3 (translucent)
-  /// - [TwizzleAppearance.normal]  → bodyAlpha = 1.0 (opaque black)
   Future<void> setAppearance(TwizzleAppearance mode) async {
     await setBodyAlpha(mode == TwizzleAppearance.crystal ? 0.3 : 1.0);
   }
+
+  // ── Desktop drag forwarding ───────────────────────────────────────────────
+
+  Future<void> _onDragBegin(double x, double y) async {
+    try { await _channel.invokeMethod('onDragBegin', {'x': x, 'y': y}); }
+    catch (_) {}
+  }
+
+  Future<void> _onDragMove(double x, double y) async {
+    try { await _channel.invokeMethod('onDragMove', {'x': x, 'y': y}); }
+    catch (_) {}
+  }
+
+  Future<void> _onDragEnd() async {
+    try { await _channel.invokeMethod('onDragEnd'); }
+    catch (_) {}
+  }
+
 }
 
-/// A native 3D Rubik's Cube view widget rendered using OpenGL ES 3.0.
+// ---------------------------------------------------------------------------
+// _TwizzleWindowsView — Windows implementation using Flutter Texture API
+// ---------------------------------------------------------------------------
+class _TwizzleWindowsView extends StatefulWidget {
+  final String? initialAlgorithm;
+  final double speed;
+  final Map<String, double>? backgroundColor;
+  final Map<String, double>? cameraPosition;
+  final bool touchEnabled;
+  final bool pitchLock;
+  final bool debugLogs;
+  final List<double>? faceColors;
+  final TwizzleAppearance? appearance;
+  final double? bodyAlpha;
+  final TwizzleViewCreatedCallback? onViewCreated;
+  final VoidCallback? onTap;
+
+  const _TwizzleWindowsView({
+    this.initialAlgorithm,
+    this.speed = 1.0,
+    this.backgroundColor,
+    this.cameraPosition,
+    this.touchEnabled = true,
+    this.pitchLock = true,
+    this.debugLogs = false,
+    this.faceColors,
+    this.appearance,
+    this.bodyAlpha,
+    this.onViewCreated,
+    this.onTap,
+  });
+
+  @override
+  State<_TwizzleWindowsView> createState() => _TwizzleWindowsViewState();
+}
+
+class _TwizzleWindowsViewState extends State<_TwizzleWindowsView> {
+  static const MethodChannel _mainChannel = MethodChannel('twizzledart');
+
+  int? _textureId;
+  TwizzleViewController? _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _createView();
+  }
+
+  Future<void> _createView() async {
+    final params = <String, dynamic>{
+      if (widget.initialAlgorithm != null) 'initialAlgorithm': widget.initialAlgorithm,
+      'speed': widget.speed,
+      'touchEnabled': widget.touchEnabled,
+      'pitchLock': widget.pitchLock,
+      'debugLogs': widget.debugLogs,
+      if (widget.backgroundColor != null) 'backgroundColor': widget.backgroundColor,
+      if (widget.cameraPosition != null)  'cameraPosition':  widget.cameraPosition,
+      if (widget.faceColors != null)      'faceColors':      widget.faceColors,
+      if (widget.appearance != null)
+        'bodyAlpha': widget.appearance == TwizzleAppearance.crystal ? 0.3 : 1.0
+      else if (widget.bodyAlpha != null)
+        'bodyAlpha': widget.bodyAlpha,
+    };
+
+    try {
+      final int? texId = await _mainChannel.invokeMethod<int>('createView', params);
+      if (!mounted || texId == null || texId < 0) return;
+
+      final controller = TwizzleViewController._(texId);
+      if (widget.onTap != null) controller.onTap = widget.onTap;
+
+      setState(() {
+        _textureId = texId;
+        _controller = controller;
+      });
+
+      widget.onViewCreated?.call(controller);
+    } on PlatformException catch (e) {
+      debugPrint('[TwizzleView] createView failed: ${e.message}');
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_textureId != null) {
+      _mainChannel.invokeMethod('disposeView', {'textureId': _textureId}).ignore();
+    }
+    super.dispose();
+  }
+
+  void _handleDragStart(DragStartDetails d) =>
+      _controller?._onDragBegin(d.localPosition.dx, d.localPosition.dy);
+
+  void _handleDragUpdate(DragUpdateDetails d) =>
+      _controller?._onDragMove(d.localPosition.dx, d.localPosition.dy);
+
+  void _handleDragEnd(DragEndDetails d) => _controller?._onDragEnd();
+
+  @override
+  Widget build(BuildContext context) {
+    if (_textureId == null) {
+      return const SizedBox.shrink();
+    }
+
+    Widget view = Texture(textureId: _textureId!);
+
+    if (widget.touchEnabled) {
+      view = GestureDetector(
+        onPanStart:  _handleDragStart,
+        onPanUpdate: _handleDragUpdate,
+        onPanEnd:    _handleDragEnd,
+        onTap:       widget.onTap != null ? widget.onTap : null,
+        child: view,
+      );
+    } else if (widget.onTap != null) {
+      view = GestureDetector(onTap: widget.onTap, child: view);
+    }
+
+    return view;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// TwizzleView — public widget (Android + Windows)
+// ---------------------------------------------------------------------------
+
+/// A native 3D Rubik's Cube view widget.
+///
+/// - **Android**: OpenGL ES 3.0 via AndroidView (legacy; replaced in Phase 3).
+/// - **Windows**: WebGPU (DirectX 12) via Flutter Texture API.
+/// - **iOS/macOS**: coming in Phase 4 (WebGPU Metal backend).
 class TwizzleView extends StatelessWidget {
   /// The initial sequence of moves (e.g., scramble or algorithm in WCA notation)
   /// applied to the cube when the view is initialized.
@@ -251,7 +402,7 @@ class TwizzleView extends StatelessWidget {
   /// Custom camera position configuration to control the viewing angle and distance.
   final Map<String, double>? cameraPosition;
 
-  /// Whether user touch gestures to rotate the cube or execute moves directly are enabled.
+  /// Whether user touch/mouse gestures to rotate the cube are enabled.
   /// Defaults to `true`.
   final bool touchEnabled;
 
@@ -261,7 +412,6 @@ class TwizzleView extends StatelessWidget {
   final List<double>? faceColors;
 
   /// The visual appearance style of the cube body.
-  /// Prefer this over the raw [bodyAlpha] parameter for clarity.
   ///
   /// - [TwizzleAppearance.crystal] → translucent body (bodyAlpha = 0.3)
   /// - [TwizzleAppearance.normal]  → opaque black body (bodyAlpha = 1.0)
@@ -269,19 +419,22 @@ class TwizzleView extends StatelessWidget {
   /// If both [appearance] and [bodyAlpha] are provided, [appearance] takes precedence.
   final TwizzleAppearance? appearance;
 
-  /// The raw opacity of the cubie body/foundation, from `0.0` (invisible) to `1.0` (fully opaque).
-  /// Only used when [appearance] is not set. Prefer [appearance] for standard use cases.
+  /// The raw opacity of the cubie body/foundation, from `0.0` to `1.0`.
+  /// Only used when [appearance] is not set.
   final double? bodyAlpha;
-  
+
   /// Whether vertical rotation (pitch) is restricted to [-89, 89] degrees.
-  /// Defaults to `true`. If `false`, the cube can be rotated completely upside down.
+  /// Defaults to `true`.
   final bool pitchLock;
 
+  /// Whether native debug logs are enabled.
+  /// Defaults to `false`.
+  final bool debugLogs;
+
   /// Callback triggered once the native platform view is created.
-  /// Provides a [TwizzleViewController] to interact with the cube programmatically.
   final TwizzleViewCreatedCallback? onViewCreated;
 
-  /// Callback triggered when the 3D Rubik's cube view is tapped.
+  /// Callback triggered when the cube view is tapped.
   final VoidCallback? onTap;
 
   const TwizzleView({
@@ -292,6 +445,7 @@ class TwizzleView extends StatelessWidget {
     this.cameraPosition,
     this.touchEnabled = true,
     this.pitchLock = true,
+    this.debugLogs = false,
     this.faceColors,
     this.appearance,
     this.bodyAlpha,
@@ -301,45 +455,74 @@ class TwizzleView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const String viewType = 'twizzle_view';
-    
-    final Map<String, dynamic> creationParams = <String, dynamic>{
-      if (initialAlgorithm != null) 'initialAlgorithm': initialAlgorithm,
-      'speed': speed,
-      'touchEnabled': touchEnabled,
-      'pitchLock': pitchLock,
-      if (backgroundColor != null) 'backgroundColor': backgroundColor,
-      if (cameraPosition != null) 'cameraPosition': cameraPosition,
-      if (faceColors != null) 'faceColors': faceColors,
-      // appearance takes precedence over raw bodyAlpha
-      if (appearance != null)
-        'bodyAlpha': appearance == TwizzleAppearance.crystal ? 0.3 : 1.0
-      else if (bodyAlpha != null)
-        'bodyAlpha': bodyAlpha,
-    };
-
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return AndroidView(
-        viewType: viewType,
-        onPlatformViewCreated: _onPlatformViewCreated,
-        creationParams: creationParams,
-        creationParamsCodec: const StandardMessageCodec(),
+    // ── Windows & macOS: WebGPU via Flutter Texture API / Platform Views ───
+    if (defaultTargetPlatform == TargetPlatform.windows) {
+      return _TwizzleWindowsView(
+        initialAlgorithm: initialAlgorithm,
+        speed: speed,
+        backgroundColor: backgroundColor,
+        cameraPosition: cameraPosition,
+        touchEnabled: touchEnabled,
+        pitchLock: pitchLock,
+        debugLogs: debugLogs,
+        faceColors: faceColors,
+        appearance: appearance,
+        bodyAlpha: bodyAlpha,
+        onViewCreated: onViewCreated,
+        onTap: onTap,
       );
     }
 
+    // ── Android & iOS: Native Views (AndroidView / UiKitView) ───────────────
+    if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.macOS) {
+      const String viewType = 'twizzle_view';
+      final Map<String, dynamic> creationParams = <String, dynamic>{
+        if (initialAlgorithm != null) 'initialAlgorithm': initialAlgorithm,
+        'speed': speed,
+        'touchEnabled': touchEnabled,
+        'pitchLock': pitchLock,
+        'debugLogs': debugLogs,
+        if (backgroundColor != null) 'backgroundColor': backgroundColor,
+        if (cameraPosition != null) 'cameraPosition': cameraPosition,
+        if (faceColors != null) 'faceColors': faceColors,
+        if (appearance != null)
+          'bodyAlpha': appearance == TwizzleAppearance.crystal ? 0.3 : 1.0
+        else if (bodyAlpha != null)
+          'bodyAlpha': bodyAlpha,
+      };
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        return AndroidView(
+          viewType: viewType,
+          onPlatformViewCreated: _onPlatformViewCreated,
+          creationParams: creationParams,
+          creationParamsCodec: const StandardMessageCodec(),
+        );
+      } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+        return UiKitView(
+          viewType: viewType,
+          onPlatformViewCreated: _onPlatformViewCreated,
+          creationParams: creationParams,
+          creationParamsCodec: const StandardMessageCodec(),
+        );
+      } else if (defaultTargetPlatform == TargetPlatform.macOS) {
+        return AppKitView(
+          viewType: viewType,
+          onPlatformViewCreated: _onPlatformViewCreated,
+          creationParams: creationParams,
+          creationParamsCodec: const StandardMessageCodec(),
+        );
+      }
+    }
+
     return Center(
-      child: Text(
-        '$defaultTargetPlatform is not supported by TwizzleView yet.',
-      ),
+      child: Text('$defaultTargetPlatform is not supported by TwizzleView yet.'),
     );
   }
 
   void _onPlatformViewCreated(int id) {
     if (onViewCreated != null) {
       final controller = TwizzleViewController._(id);
-      if (onTap != null) {
-        controller.onTap = onTap;
-      }
+      if (onTap != null) controller.onTap = onTap;
       onViewCreated!(controller);
     }
   }
