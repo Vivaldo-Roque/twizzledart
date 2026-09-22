@@ -19,7 +19,7 @@ void main() {
     testWidgets('renders unsupported platform message on non-Android platform', (
       tester,
     ) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
 
       try {
         TwizzleViewController? createdController;
