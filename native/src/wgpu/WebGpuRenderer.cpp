@@ -839,6 +839,8 @@ void WebGpuRenderer::setCameraPosition(float lat, float lon, float radius)
     { camera_.setPosition(lat, lon, radius); }
 void WebGpuRenderer::setPitchLock(bool locked)
     { camera_.setPitchLock(locked); }
+void WebGpuRenderer::setShowHint(bool show)
+    { showHint_ = show; }
 void WebGpuRenderer::setDebugLogs(bool enabled) {
     debugLogs_ = enabled;
 #if defined(__ANDROID__)

@@ -218,7 +218,7 @@ void main() {
         expect(log.last.arguments, {'alpha': 1.0});
 
         // 16. onTap handler via incoming platform channel call
-        final ByteData? message = const StandardMethodCodec().encodeMethodCall(
+        final ByteData message = const StandardMethodCodec().encodeMethodCall(
           const MethodCall('onTap'),
         );
         await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

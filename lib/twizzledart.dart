@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -366,7 +365,7 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView> {
         onPanStart:  _handleDragStart,
         onPanUpdate: _handleDragUpdate,
         onPanEnd:    _handleDragEnd,
-        onTap:       widget.onTap != null ? widget.onTap : null,
+        onTap:       widget.onTap,
         child: view,
       );
     } else if (widget.onTap != null) {
