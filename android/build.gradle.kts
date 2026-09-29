@@ -94,3 +94,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.0.0")
 }
+
+kotlin {
+    jvmToolchain(17)
+}
