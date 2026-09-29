@@ -88,7 +88,9 @@ static WGPUAdapter requestAdapterSync(WGPUInstance instance,
     Result res;
 
     WGPURequestAdapterOptions opts = {};
+#if !defined(__ANDROID__)
     opts.compatibleSurface = surface;
+#endif
     opts.powerPreference   = WGPUPowerPreference_HighPerformance;
 
     wgpuInstanceRequestAdapter(instance, &opts,
@@ -243,13 +245,15 @@ bool WebGpuRenderer::createSurface(const SurfaceDescriptor& d) {
 // ---------------------------------------------------------------------------
 
 void WebGpuRenderer::configureSurface() {
+    WGPUTextureFormat fmt = WGPUTextureFormat_BGRA8Unorm;
+
+#if !defined(__ANDROID__)
     WGPUSurfaceCapabilities caps = {};
     wgpuSurfaceGetCapabilities(surface_, adapter_, &caps);
 
     // Use a linear (non-sRGB) format to match OpenGL's default behavior.
     // Modern APIs often default to sRGB, which causes "double gamma correction"
     // when passing Flutter's already-sRGB colors.
-    WGPUTextureFormat fmt = WGPUTextureFormat_BGRA8Unorm;
     if (caps.formatCount > 0) {
         fmt = caps.formats[0]; // fallback to preferred
         for (uint32_t i = 0; i < caps.formatCount; ++i) {
@@ -260,6 +264,14 @@ void WebGpuRenderer::configureSurface() {
             }
         }
     }
+    // TODO: Free caps if wgpu-native exposes wgpuSurfaceCapabilitiesFreeMembers
+#else
+    // On Android (wgpu-native GLES fallback), probing capabilities connects
+    // EGL to the surface and causes `already connected` on wgpuSurfaceConfigure.
+    // BGRA8Unorm or RGBA8Unorm is universally supported on Android.
+    fmt = WGPUTextureFormat_RGBA8Unorm;
+#endif
+
 
     WGPUSurfaceConfiguration cfg = {};
     cfg.device      = device_;
@@ -549,10 +561,17 @@ void WebGpuRenderer::rebuildBindGroup() {
 // ---------------------------------------------------------------------------
 
 void WebGpuRenderer::resize(uint32_t width, uint32_t height) {
-    width_  = (width  > 0) ? width  : 1;
-    height_ = (height > 0) ? height : 1;
+    width  = (width  > 0) ? width  : 1;
+    height = (height > 0) ? height : 1;
+    if (width_ == width && height_ == height) return;
+    
+    width_  = width;
+    height_ = height;
     camera_.setViewport((int)width_, (int)height_);
     if (!initialized_) return;
+    
+    // Attempt to configure the surface. On Android GLES, rapid reconfigurations
+    // can cause EGL_BAD_ALLOC if the old swapchain hasn't fully disconnected.
     configureSurface();
     createDepthTexture();
 }

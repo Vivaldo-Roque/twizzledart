@@ -10,11 +10,14 @@ import android.content.Context
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+
 /**
- * WebGPU-backed cube renderer using a [TextureView] + Vulkan (via wgpu-native).
+ * WebGPU-backed cube renderer using a [SurfaceView] + Vulkan (via wgpu-native).
  *
  * Replaces [TwizzleGLSurfaceView] (OpenGL ES 3.0) with:
- *  - [TextureView] as the on-screen surface (hardware-accelerated, composited by Flutter)
+ *  - [SurfaceView] as the on-screen surface (hardware-accelerated)
  *  - [Choreographer] callbacks for VSync-locked rendering (no extra GLThread)
  *  - JNI bridge to [WebGpuRenderer] in native/ (Vulkan backend on Android)
  *
@@ -68,16 +71,15 @@ class TwizzleTextureRenderer(context: Context) :
 
     init {
         surfaceTextureListener = this
-        isOpaque = false // allow transparent background
+        isOpaque = false // Enable transparency
     }
 
-    // ── SurfaceTextureListener ──────────────────────────────────────────────
+    // ── TextureView.SurfaceTextureListener ──────────────────────────────────
 
-    override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+    override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
         if (isDestroyed) return
-        val surface = Surface(texture)
+        val surface = Surface(surfaceTexture)
         nativeHandle = nativeCreate(surface, width, height)
-        surface.release() // wgpu-native retains the ANativeWindow internally
 
         if (nativeHandle == 0L) return
 
@@ -95,11 +97,11 @@ class TwizzleTextureRenderer(context: Context) :
         startRenderLoop()
     }
 
-    override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
+    override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
         if (nativeHandle != 0L) nativeResize(nativeHandle, width, height)
     }
 
-    override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+    override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
         stopRenderLoop()
         if (nativeHandle != 0L) {
             nativeDestroy(nativeHandle)
@@ -108,7 +110,9 @@ class TwizzleTextureRenderer(context: Context) :
         return true
     }
 
-    override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {}
+    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
+        // No-op
+    }
 
     // ── Choreographer render loop ──────────────────────────────────────────
 
