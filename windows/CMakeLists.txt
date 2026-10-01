@@ -11,6 +11,7 @@ set(PLUGIN_NAME "twizzledart_plugin")
 # ---------------------------------------------------------------------------
 add_library(${PLUGIN_NAME} SHARED
   "twizzledart_plugin.cpp"
+  "twizzledart_plugin_c_api.cpp"
 )
 
 # Include native/ core (twizzle_core + twizzle_wgpu)
@@ -22,6 +23,9 @@ add_subdirectory(
 # ---------------------------------------------------------------------------
 # Include directories
 # ---------------------------------------------------------------------------
+target_include_directories(${PLUGIN_NAME} INTERFACE
+  "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 target_include_directories(${PLUGIN_NAME} PRIVATE
   # Flutter embedder headers (provided by the Flutter Windows SDK)
   "${FLUTTER_MANAGED_DIR}/ephemeral/include"
@@ -41,6 +45,11 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   d3d12.lib
   dxgi.lib
   dxguid.lib
+  d3dcompiler.lib
+  ws2_32.lib
+  userenv.lib
+  bcrypt.lib
+  ntdll.lib
 )
 
 # ---------------------------------------------------------------------------

@@ -38,8 +38,8 @@ flutter:
         package: com.example.twizzledart.twizzledart
         pluginClass: TwizzledartPlugin
       windows:
-        pluginClass: TwizzledartPlugin
-        fileName: twizzledart_plugin.h
+        pluginClass: TwizzledartPluginCApi
+        fileName: twizzledart_plugin_c_api.h
       ios:
         pluginClass: TwizzledartPlugin
       macos:
