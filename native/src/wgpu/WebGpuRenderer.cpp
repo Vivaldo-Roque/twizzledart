@@ -587,6 +587,7 @@ void WebGpuRenderer::render(float dt) {
     camera_.update(dt, now);
     animator_->update(dt);
 
+#ifdef __ANDROID__
     static int s_logFrame = 0;
     if (debugLogs_ && ++s_logFrame % 60 == 1) {
         glm::vec3 p = camera_.position();
@@ -598,6 +599,7 @@ void WebGpuRenderer::render(float dt) {
             camera_.latitude(), camera_.longitude(), camera_.radius(),
             vertices_.size(), cubies_.size(), CubeGeometry::kFoundAlpha, f0, s0);
     }
+#endif
 
     // ── Acquire swap-chain texture ──────────────────────────────────────
     WGPUSurfaceTexture st = {};

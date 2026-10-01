@@ -70,6 +70,7 @@ void OrbitCamera::endDrag(float timeNow) {
 }
 
 void OrbitCamera::update(float dt, float timeNow) {
+    (void)dt; // Suppress unused parameter warning
     if (!inertia_.active) return;
 
     constexpr float kInertiaMs = 0.5f;
