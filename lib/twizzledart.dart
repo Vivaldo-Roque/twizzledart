@@ -306,6 +306,8 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView> {
 
   Future<void> _createView() async {
     final params = <String, dynamic>{
+      'width': 1024,
+      'height': 1024,
       if (widget.initialAlgorithm != null) 'initialAlgorithm': widget.initialAlgorithm,
       'speed': widget.speed,
       'touchEnabled': widget.touchEnabled,
@@ -360,7 +362,15 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView> {
       return const SizedBox.shrink();
     }
 
-    Widget view = Texture(textureId: _textureId!);
+    Widget view = Center(
+      child: AspectRatio(
+        aspectRatio: 1.0,
+        child: Texture(
+          textureId: _textureId!,
+          filterQuality: FilterQuality.medium,
+        ),
+      ),
+    );
 
     if (widget.touchEnabled) {
       view = GestureDetector(
@@ -368,10 +378,17 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView> {
         onPanUpdate: _handleDragUpdate,
         onPanEnd:    _handleDragEnd,
         onTap:       widget.onTap,
-        child: view,
+        behavior:    HitTestBehavior.opaque,
+        child: SizedBox.expand(child: view),
       );
     } else if (widget.onTap != null) {
-      view = GestureDetector(onTap: widget.onTap, child: view);
+      view = GestureDetector(
+        onTap: widget.onTap,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox.expand(child: view),
+      );
+    } else {
+      view = SizedBox.expand(child: view);
     }
 
     return view;

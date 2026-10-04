@@ -140,8 +140,8 @@ void TwizzledartPlugin::OnCreateView(
     const auto* args = GetMap(*call.arguments());
     if (!args) { result->Error("INVALID_ARGS", "Expected map"); return; }
 
-    uint32_t width  = (uint32_t)GetDouble(*args, "width",  400);
-    uint32_t height = (uint32_t)GetDouble(*args, "height", 400);
+    uint32_t width  = (uint32_t)GetDouble(*args, "width",  1024);
+    uint32_t height = (uint32_t)GetDouble(*args, "height", 1024);
 
     // Parse creation params (mirrors Android TwizzledartPlugin)
     std::string initialAlgorithm = GetString(*args, "initialAlgorithm");
@@ -202,12 +202,11 @@ void TwizzledartPlugin::OnCreateView(
     auto textureVariant = std::make_unique<flutter::TextureVariant>(
         flutter::PixelBufferTexture(
             [rawInst](size_t w, size_t h) -> const FlutterDesktopPixelBuffer* {
-                static FlutterDesktopPixelBuffer buf{};
                 std::lock_guard<std::mutex> lock(rawInst->rendererMutex);
-                buf.buffer   = rawInst->pixelBuffer.get();
-                buf.width    = rawInst->bufferWidth;
-                buf.height   = rawInst->bufferHeight;
-                return &buf;
+                rawInst->flutterPixelBuffer.buffer = rawInst->pixelBuffer.get();
+                rawInst->flutterPixelBuffer.width  = rawInst->bufferWidth;
+                rawInst->flutterPixelBuffer.height = rawInst->bufferHeight;
+                return &rawInst->flutterPixelBuffer;
             }));
 
     inst->textureId = registrar_->texture_registrar()->RegisterTexture(
@@ -223,24 +222,14 @@ void TwizzledartPlugin::OnCreateView(
     // We'll release it in OnDisposeView.
     inst->renderer = nullptr; // will be set below
 
-    // ── Initialise WebGpuRenderer (offscreen, no native window) ──────────
-    // On Windows we use wgpu-native's "windowless" / headless surface path:
-    // create an offscreen surface backed by a D3D11 texture, render into it,
-    // then use wgpuBufferMapAsync to readback pixels each frame into our
-    // pixelBuffer. For initial simplicity we use software-emulated readback
-    // (wgpu's DX12 backend + mapped staging buffer).
+    // ── Initialise WebGpuRenderer (pure offscreen rendering, no native HWND)
     {
         auto renderer = std::make_unique<twizzle::renderer::WebGpuRenderer>();
 
-        // Get HWND of the Flutter window (for D3D surface creation)
-        HWND hwnd = registrar_->GetView()->GetNativeWindow();
-        HINSTANCE hInst = GetModuleHandle(nullptr);
-
         twizzle::renderer::SurfaceDescriptor surfDesc;
-        surfDesc.hwnd      = hwnd;
-        surfDesc.hinstance = hInst;
-        surfDesc.width     = width;
-        surfDesc.height    = height;
+        surfDesc.width       = width;
+        surfDesc.height      = height;
+        surfDesc.isOffscreen = true;
 
         if (renderer->init(surfDesc)) {
             renderer->setBackgroundColor((float)bgR, (float)bgG, (float)bgB, 1.0f);
@@ -328,24 +317,19 @@ void TwizzledartPlugin::RenderLoop(CubeViewInstance* inst) {
         float dt = std::chrono::duration<float>(now - prev).count();
         prev = now;
 
+        bool frameRendered = false;
         {
             std::lock_guard<std::mutex> lock(inst->rendererMutex);
-            if (inst->renderer) {
-                // Render one frame — writes into the wgpu surface texture.
-                inst->renderer->render(dt);
-
-                // NOTE: Pixel readback from the GPU surface into inst->pixelBuffer
-                // will be added in a follow-up step using a wgpu staging buffer.
-                // For now the loop runs to drive animations (WebGPU presents to
-                // an offscreen surface); the actual Flutter Texture integration
-                // requires mapping a WGPUBuffer via wgpuBufferMapAsync and
-                // memcpy-ing into pixelBuffer before marking the texture dirty.
+            if (inst->renderer && inst->pixelBuffer) {
+                frameRendered = inst->renderer->renderToBuffer(dt, inst->pixelBuffer.get());
             }
         }
 
-        // Tell Flutter the texture has new data
-        registrar_->texture_registrar()->MarkTextureFrameAvailable(
-            inst->textureId);
+        if (frameRendered) {
+            // Tell Flutter the texture has new data
+            registrar_->texture_registrar()->MarkTextureFrameAvailable(
+                inst->textureId);
+        }
 
         // Sleep to target ~60 fps
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

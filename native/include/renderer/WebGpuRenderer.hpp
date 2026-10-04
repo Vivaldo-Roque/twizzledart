@@ -42,6 +42,7 @@ struct SurfaceDescriptor {
 
     uint32_t width  = 1;
     uint32_t height = 1;
+    bool     isOffscreen = false;
 };
 
 class WebGpuRenderer {
@@ -64,6 +65,11 @@ public:
     /// Advances animation, encodes and submits one frame.
     /// @param dt Seconds since the last call to render().
     void render(float dt);
+
+    /// Advances animation, encodes and submits one frame into an offscreen buffer.
+    /// @param dt Seconds since the last call to render().
+    /// @param destBuffer Destination buffer (RGBA8, width * height * 4 bytes).
+    bool renderToBuffer(float dt, uint8_t* destBuffer);
 
     /// Releases all WebGPU resources. Call before destroying the surface.
     void destroy();
@@ -152,7 +158,19 @@ private:
     bool     dragging_  = false;
     float    lastDragX_ = 0, lastDragY_ = 0;
 
+    // Offscreen render targets
+    bool        isOffscreen_          = false;
+    WGPUTexture renderTargetTexture_  = nullptr;
+    WGPUBuffer  readbackBuffer_       = nullptr;
+    uint32_t    bytesPerRow_          = 0;
+    uint32_t    bufferSize_           = 0;
+
     // ── Internal helpers ──────────────────────────────────────────────────
+
+    /// Creates offscreen render target and readback buffer.
+    void createOffscreenTarget();
+    /// Internal render implementation supporting both surface and offscreen targets.
+    bool renderInternal(float dt, uint8_t* destBuffer);
 
     /// Creates the WGPUSurface from the platform surface descriptor.
     bool createSurface    (const SurfaceDescriptor& desc);
