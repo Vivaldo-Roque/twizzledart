@@ -141,5 +141,5 @@ target_link_libraries(twizzle_wgpu
 
 # Android extra: link system libs
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
-  target_link_libraries(twizzle_wgpu PUBLIC android log)
+  target_link_libraries(twizzle_wgpu PUBLIC android log EGL GLESv3)
 endif()

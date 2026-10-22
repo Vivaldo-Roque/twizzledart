@@ -16,10 +16,28 @@
 #include <wgpu/wgpu.h>
 #if defined(__ANDROID__)
 #include <android/log.h>
+#include <sys/system_properties.h>
+#include <dlfcn.h>
 #define TW_LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "TwizzleWGPU", __VA_ARGS__)
 #define TW_LOGW(...) __android_log_print(ANDROID_LOG_WARN,  "TwizzleWGPU", __VA_ARGS__)
 #define TW_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "TwizzleWGPU", __VA_ARGS__)
 #define TW_LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "TwizzleWGPU", __VA_ARGS__)
+
+static bool isEmulatorDevice() {
+    char prop[PROP_VALUE_MAX] = {0};
+    if (__system_property_get("ro.kernel.qemu", prop) > 0 && strcmp(prop, "1") == 0) return true;
+    if (__system_property_get("ro.boot.qemu", prop) > 0 && strcmp(prop, "1") == 0) return true;
+    if (__system_property_get("ro.hardware", prop) > 0) {
+        if (strstr(prop, "goldfish") || strstr(prop, "ranchu") || strstr(prop, "cheets")) return true;
+    }
+    if (__system_property_get("ro.build.characteristics", prop) > 0) {
+        if (strstr(prop, "emulator")) return true;
+    }
+    if (__system_property_get("ro.product.model", prop) > 0) {
+        if (strstr(prop, "sdk_gphone") || strstr(prop, "Android SDK built for x86")) return true;
+    }
+    return false;
+}
 #else
 #define TW_LOGI(...) (std::fprintf(stdout, "[TwizzleWGPU] " __VA_ARGS__), std::fprintf(stdout, "\n"))
 #define TW_LOGW(...) (std::fprintf(stderr, "[TwizzleWGPU WARN] " __VA_ARGS__), std::fprintf(stderr, "\n"))
@@ -165,6 +183,25 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
 
     // 1. WebGPU Instance
     WGPUInstanceDescriptor instDesc = {};
+#if defined(__ANDROID__)
+    WGPUInstanceExtras extras = {};
+    extras.chain.sType = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
+    if (isEmulatorDevice()) {
+        TW_LOGI("Android Emulator detected: selecting GLES (GL) backend for WebGPU");
+        extras.backends = WGPUInstanceBackend_GL;
+    } else {
+        void* vklib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+        if (vklib) {
+            dlclose(vklib);
+            TW_LOGI("Android Hardware device with Vulkan: selecting Vulkan backend");
+            extras.backends = WGPUInstanceBackend_Vulkan;
+        } else {
+            TW_LOGI("Android Hardware device without Vulkan: selecting GLES (GL) backend");
+            extras.backends = WGPUInstanceBackend_GL;
+        }
+    }
+    instDesc.nextInChain = reinterpret_cast<const WGPUChainedStruct*>(&extras);
+#endif
     instance_ = wgpuCreateInstance(&instDesc);
     if (!instance_) { std::fprintf(stderr, "[Twizzle] wgpuCreateInstance failed\n"); return false; }
 

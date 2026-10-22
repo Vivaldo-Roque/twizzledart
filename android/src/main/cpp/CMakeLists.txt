@@ -34,6 +34,8 @@ target_compile_definitions(twizzle PRIVATE
 # wgpu-native on Android requires Android system libs
 find_library(LOG_LIB   log)
 find_library(ANDROID_LIB android)
+find_library(EGL_LIB   EGL)
+find_library(GLES3_LIB GLESv3)
 
 target_link_libraries(twizzle
   # WebGPU renderer + core (glm, cube state, geometry, camera, animator)
@@ -41,8 +43,8 @@ target_link_libraries(twizzle
   # Android system
   ${LOG_LIB}
   ${ANDROID_LIB}
-  # NOTE: GLES3 / EGL are NO LONGER needed — wgpu-native uses Vulkan directly.
-  # They remain removed intentionally to enforce the migration.
+  ${EGL_LIB}
+  ${GLES3_LIB}
 )
 
 # Support 16KB page sizes on Android 15+ (sdk_gphone16k emulator and modern devices)

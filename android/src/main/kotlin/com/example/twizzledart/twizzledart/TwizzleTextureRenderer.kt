@@ -78,8 +78,18 @@ class TwizzleTextureRenderer(context: Context) :
 
     override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
         if (isDestroyed) return
-        val surface = Surface(surfaceTexture)
-        nativeHandle = nativeCreate(surface, width, height)
+        if (nativeHandle != 0L) {
+            stopRenderLoop()
+            nativeDestroy(nativeHandle)
+            nativeHandle = 0L
+        }
+        try {
+            val surface = Surface(surfaceTexture)
+            nativeHandle = nativeCreate(surface, width, height)
+        } catch (e: Throwable) {
+            android.util.Log.e("TwizzleTextureRenderer", "Failed to create native renderer: ${e.message}", e)
+            nativeHandle = 0L
+        }
 
         if (nativeHandle == 0L) return
 
