@@ -179,6 +179,8 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
     isOffscreen_ = desc.isOffscreen;
     width_  = desc.width;
     height_ = desc.height;
+    lastRenderedWidth_  = width_;
+    lastRenderedHeight_ = height_;
     camera_.setViewport((int)width_, (int)height_);
 
     // 1. WebGPU Instance
@@ -342,11 +344,39 @@ void WebGpuRenderer::createOffscreenTarget() {
         wgpuTextureRelease(renderTargetTexture_);
         renderTargetTexture_ = nullptr;
     }
+    if (msaaColorTextureView_) {
+        wgpuTextureViewRelease(msaaColorTextureView_);
+        msaaColorTextureView_ = nullptr;
+    }
+    if (msaaColorTexture_) {
+        wgpuTextureRelease(msaaColorTexture_);
+        msaaColorTexture_ = nullptr;
+    }
+    if (motionTargetTexture_) {
+        wgpuTextureRelease(motionTargetTexture_);
+        motionTargetTexture_ = nullptr;
+    }
     if (readbackBuffer_) {
         wgpuBufferRelease(readbackBuffer_);
         readbackBuffer_ = nullptr;
     }
 
+    // Compute lightweight motion resolution (aligned to 64px = 256 bytes, capped at 640px)
+    // for 60 FPS animations/dragging on integrated GPUs (Intel UHD / Iris Xe).
+    if (width_ > 640u) {
+        uint32_t scaledW = ((width_ * 3u / 4u) + 63u) & ~63u;
+        motionWidth_ = std::min<uint32_t>(640u, std::max<uint32_t>(384u, scaledW));
+    } else {
+        motionWidth_ = width_;
+    }
+    if (height_ > 640u) {
+        uint32_t scaledH = ((height_ * 3u / 4u) + 63u) & ~63u;
+        motionHeight_ = std::min<uint32_t>(640u, std::max<uint32_t>(384u, scaledH));
+    } else {
+        motionHeight_ = height_;
+    }
+
+    // 1. High-resolution 1x resolve target (width_ x height_)
     WGPUTextureDescriptor td = {};
     td.label         = "TwizzleOffscreenTarget";
     td.usage         = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc;
@@ -357,9 +387,25 @@ void WebGpuRenderer::createOffscreenTarget() {
     td.sampleCount   = 1;
     renderTargetTexture_ = wgpuDeviceCreateTexture(device_, &td);
 
+    // 2. High-resolution 4x MSAA color attachment (resolved in GPU cache with StoreOp_Discard)
+    WGPUTextureDescriptor msaaTd = td;
+    msaaTd.label       = "TwizzleOffscreenMSAA4x";
+    msaaTd.usage       = WGPUTextureUsage_RenderAttachment;
+    msaaTd.sampleCount = 4;
+    msaaColorTexture_     = wgpuDeviceCreateTexture(device_, &msaaTd);
+    msaaColorTextureView_ = wgpuTextureCreateView(msaaColorTexture_, nullptr);
+
+    // 3. Lightweight 1x motion target (motionWidth_ x motionHeight_, no MSAA)
+    WGPUTextureDescriptor motionTd = td;
+    motionTd.label       = "TwizzleOffscreenMotion1x";
+    motionTd.size        = {motionWidth_, motionHeight_, 1};
+    motionTd.sampleCount = 1;
+    motionTargetTexture_ = wgpuDeviceCreateTexture(device_, &motionTd);
+
     // Row pitch must be aligned to 256 bytes in WebGPU
-    bytesPerRow_ = (width_ * 4 + 255) & ~255;
-    bufferSize_  = bytesPerRow_ * height_;
+    bytesPerRow_       = (width_ * 4 + 255) & ~255;
+    bufferSize_        = bytesPerRow_ * height_;
+    motionBytesPerRow_ = (motionWidth_ * 4 + 255) & ~255;
 
     WGPUBufferDescriptor bd = {};
     bd.label = "TwizzleReadbackBuffer";
@@ -376,13 +422,24 @@ void WebGpuRenderer::createDepthTexture() {
     if (depthTexture_) {
         wgpuTextureViewRelease(depthTextureView_);
         wgpuTextureRelease(depthTexture_);
+        depthTextureView_ = nullptr;
+        depthTexture_     = nullptr;
+    }
+    if (depthTextureMsaa_) {
+        wgpuTextureViewRelease(depthTextureViewMsaa_);
+        wgpuTextureRelease(depthTextureMsaa_);
+        depthTextureViewMsaa_ = nullptr;
+        depthTextureMsaa_     = nullptr;
     }
 
+    const uint32_t dWidth  = isOffscreen_ ? motionWidth_  : width_;
+    const uint32_t dHeight = isOffscreen_ ? motionHeight_ : height_;
+
     WGPUTextureDescriptor td = {};
-    td.label         = "depth";
+    td.label         = "depth1x";
     td.usage         = WGPUTextureUsage_RenderAttachment;
     td.dimension     = WGPUTextureDimension_2D;
-    td.size          = {width_, height_, 1};
+    td.size          = {dWidth, dHeight, 1};
     td.format        = WGPUTextureFormat_Depth24Plus;
     td.mipLevelCount = 1;
     td.sampleCount   = 1;
@@ -395,6 +452,15 @@ void WebGpuRenderer::createDepthTexture() {
     tvd.arrayLayerCount = 1;
     tvd.aspect          = WGPUTextureAspect_DepthOnly;
     depthTextureView_ = wgpuTextureCreateView(depthTexture_, &tvd);
+
+    if (isOffscreen_) {
+        WGPUTextureDescriptor msaaDepthTd = td;
+        msaaDepthTd.label       = "depth4xMsaa";
+        msaaDepthTd.size        = {width_, height_, 1};
+        msaaDepthTd.sampleCount = 4;
+        depthTextureMsaa_     = wgpuDeviceCreateTexture(device_, &msaaDepthTd);
+        depthTextureViewMsaa_ = wgpuTextureCreateView(depthTextureMsaa_, &tvd);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -599,6 +665,24 @@ bool WebGpuRenderer::createPipeline() {
     rpd.primitive.cullMode = WGPUCullMode_Back;
     stickerPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
 
+    // ── 4x MSAA Pipelines for High-Res Resting Frame in Offscreen Mode ──────
+    if (isOffscreen_) {
+        rpd.multisample.count  = 4;
+        rpd.fragment           = &fs;
+        rpd.depthStencil       = &dssHint;
+        rpd.primitive.cullMode = WGPUCullMode_Front;
+        hintPipelineMsaa_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
+
+        rpd.depthStencil       = &dssFound;
+        rpd.primitive.cullMode = WGPUCullMode_Back;
+        foundPipelineMsaa_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
+
+        rpd.fragment           = &fsOpaque;
+        rpd.depthStencil       = &dssSticker;
+        rpd.primitive.cullMode = WGPUCullMode_Back;
+        stickerPipelineMsaa_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
+    }
+
     wgpuPipelineLayoutRelease(pipelineLayout);
     wgpuShaderModuleRelease(shader);
 
@@ -704,13 +788,37 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     camera_.update(dt, now);
     animator_->update(dt);
 
-    // ── Acquire backbuffer texture view ─────────────────────────────────
+    // ── Acquire backbuffer texture view & select Dual-Target mode ────────
     WGPUSurfaceTexture st = {};
     WGPUTextureView backbuffer = nullptr;
 
+    const bool inMotion = isOffscreen_ &&
+        (dragging_ || camera_.isInertiaActive() || (animator_ && animator_->isPlaying()));
+    const bool useMsaaResting = isOffscreen_ && !inMotion &&
+        msaaColorTextureView_ != nullptr && depthTextureViewMsaa_ != nullptr &&
+        hintPipelineMsaa_ != nullptr && foundPipelineMsaa_ != nullptr && stickerPipelineMsaa_ != nullptr;
+
+    WGPUTexture activeOffscreenTex = renderTargetTexture_;
+    uint32_t    activeWidth        = width_;
+    uint32_t    activeHeight       = height_;
+    uint32_t    activeBytesPerRow  = bytesPerRow_;
+
     if (isOffscreen_) {
-        if (!renderTargetTexture_) { dirty_ = true; return false; }
-        backbuffer = wgpuTextureCreateView(renderTargetTexture_, nullptr);
+        if (inMotion && motionTargetTexture_) {
+            activeOffscreenTex       = motionTargetTexture_;
+            activeWidth              = motionWidth_;
+            activeHeight             = motionHeight_;
+            activeBytesPerRow        = motionBytesPerRow_;
+            needsHighResSettleFrame_ = true;
+        } else {
+            activeOffscreenTex       = renderTargetTexture_;
+            activeWidth              = width_;
+            activeHeight             = height_;
+            activeBytesPerRow        = bytesPerRow_;
+            needsHighResSettleFrame_ = false;
+        }
+        if (!activeOffscreenTex) { dirty_ = true; return false; }
+        backbuffer = wgpuTextureCreateView(activeOffscreenTex, nullptr);
     } else {
         wgpuSurfaceGetCurrentTexture(surface_, &st);
         if (st.status != WGPUSurfaceGetCurrentTextureStatus_Success) {
@@ -771,15 +879,24 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device_, &ced);
 
     WGPURenderPassColorAttachment ca = {};
-    ca.view         = backbuffer;
-    ca.loadOp       = WGPULoadOp_Clear;
-    ca.storeOp      = WGPUStoreOp_Store;
-    ca.clearValue   = {bgR_, bgG_, bgB_, bgA_};
+    if (useMsaaResting) {
+        // 4x MSAA hardware resolve into backbuffer; discard 4x samples in GPU tile/L3 cache
+        ca.view          = msaaColorTextureView_;
+        ca.resolveTarget = backbuffer;
+        ca.loadOp        = WGPULoadOp_Clear;
+        ca.storeOp       = WGPUStoreOp_Discard;
+    } else {
+        ca.view          = backbuffer;
+        ca.resolveTarget = nullptr;
+        ca.loadOp        = WGPULoadOp_Clear;
+        ca.storeOp       = WGPUStoreOp_Store;
+    }
+    ca.clearValue = {bgR_, bgG_, bgB_, bgA_};
 
     WGPURenderPassDepthStencilAttachment da = {};
-    da.view              = depthTextureView_;
+    da.view              = useMsaaResting ? depthTextureViewMsaa_ : depthTextureView_;
     da.depthLoadOp       = WGPULoadOp_Clear;
-    da.depthStoreOp      = WGPUStoreOp_Store;
+    da.depthStoreOp      = useMsaaResting ? WGPUStoreOp_Discard : WGPUStoreOp_Store;
     da.depthClearValue   = 1.0f;
     da.stencilLoadOp     = WGPULoadOp_Undefined;
     da.stencilStoreOp    = WGPUStoreOp_Undefined;
@@ -793,9 +910,13 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertexBuffer_,
         0, vertices_.size() * sizeof(Vertex));
 
+    WGPURenderPipeline activeHintPipe    = useMsaaResting ? hintPipelineMsaa_    : hintPipeline_;
+    WGPURenderPipeline activeFoundPipe   = useMsaaResting ? foundPipelineMsaa_   : foundPipeline_;
+    WGPURenderPipeline activeStickerPipe = useMsaaResting ? stickerPipelineMsaa_ : stickerPipeline_;
+
     // ── Pass 1: Hints (only if showHint_ is true) ───────────────────────────
     if (showHint_) {
-        wgpuRenderPassEncoderSetPipeline(pass, hintPipeline_);
+        wgpuRenderPassEncoderSetPipeline(pass, activeHintPipe);
         wgpuRenderPassEncoderSetBindGroup(pass, 0, frameBindGroup_, 0, nullptr);
         for (size_t i = 0; i < cubies_.size(); ++i) {
             const CubieInfo& c = cubies_[i];
@@ -807,7 +928,7 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     }
 
     // ── Pass 2: Foundation (black cubie bodies) ─────────────────────────────
-    wgpuRenderPassEncoderSetPipeline(pass, foundPipeline_);
+    wgpuRenderPassEncoderSetPipeline(pass, activeFoundPipe);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, frameBindGroup_, 0, nullptr);
     for (size_t i = 0; i < cubies_.size(); ++i) {
         const CubieInfo& c = cubies_[i];
@@ -818,7 +939,7 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     }
 
     // ── Pass 3: Stickers (opaque coloured quads) ────────────────────────────
-    wgpuRenderPassEncoderSetPipeline(pass, stickerPipeline_);
+    wgpuRenderPassEncoderSetPipeline(pass, activeStickerPipe);
     wgpuRenderPassEncoderSetBindGroup(pass, 0, frameBindGroup_, 0, nullptr);
     for (size_t i = 0; i < cubies_.size(); ++i) {
         const CubieInfo& c = cubies_[i];
@@ -831,9 +952,11 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
 
+    const uint32_t activeBufferSize = activeBytesPerRow * activeHeight;
+
     if (isOffscreen_) {
         WGPUImageCopyTexture src = {};
-        src.texture = renderTargetTexture_;
+        src.texture = activeOffscreenTex;
         src.mipLevel = 0;
         src.origin = {0, 0, 0};
         src.aspect = WGPUTextureAspect_All;
@@ -841,10 +964,10 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
         WGPUImageCopyBuffer dst = {};
         dst.buffer = readbackBuffer_;
         dst.layout.offset = 0;
-        dst.layout.bytesPerRow = bytesPerRow_;
-        dst.layout.rowsPerImage = height_;
+        dst.layout.bytesPerRow = activeBytesPerRow;
+        dst.layout.rowsPerImage = activeHeight;
 
-        WGPUExtent3D copySize = {width_, height_, 1};
+        WGPUExtent3D copySize = {activeWidth, activeHeight, 1};
         wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &copySize);
     }
 
@@ -859,7 +982,7 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
         if (destBuffer && readbackBuffer_) {
             struct MapContext { bool done = false; bool success = false; };
             MapContext mapCtx;
-            wgpuBufferMapAsync(readbackBuffer_, WGPUMapMode_Read, 0, bufferSize_,
+            wgpuBufferMapAsync(readbackBuffer_, WGPUMapMode_Read, 0, activeBufferSize,
                 [](WGPUBufferMapAsyncStatus status, void* ud) {
                     auto* c = reinterpret_cast<MapContext*>(ud);
                     c->done = true;
@@ -869,16 +992,18 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
             wgpuDevicePoll(device_, true, nullptr);
 
             if (mapCtx.done && mapCtx.success) {
-                const uint8_t* mapped = (const uint8_t*)wgpuBufferGetConstMappedRange(readbackBuffer_, 0, bufferSize_);
+                const uint8_t* mapped = (const uint8_t*)wgpuBufferGetConstMappedRange(readbackBuffer_, 0, activeBufferSize);
                 if (mapped) {
-                    if (bytesPerRow_ == width_ * 4) {
-                        std::memcpy(destBuffer, mapped, width_ * height_ * 4);
+                    if (activeBytesPerRow == activeWidth * 4) {
+                        std::memcpy(destBuffer, mapped, activeWidth * activeHeight * 4);
                     } else {
-                        for (uint32_t y = 0; y < height_; ++y) {
-                            std::memcpy(destBuffer + y * width_ * 4, mapped + y * bytesPerRow_, width_ * 4);
+                        for (uint32_t y = 0; y < activeHeight; ++y) {
+                            std::memcpy(destBuffer + y * activeWidth * 4, mapped + y * activeBytesPerRow, activeWidth * 4);
                         }
                     }
                     wgpuBufferUnmap(readbackBuffer_);
+                    lastRenderedWidth_  = activeWidth;
+                    lastRenderedHeight_ = activeHeight;
                     return true;
                 }
             }
@@ -905,20 +1030,28 @@ void WebGpuRenderer::destroy() {
     cubieBindGroups_.clear();
     if (frameBindGroupLayout_) { wgpuBindGroupLayoutRelease(frameBindGroupLayout_); frameBindGroupLayout_ = nullptr; }
     if (cubieBindGroupLayout_) { wgpuBindGroupLayoutRelease(cubieBindGroupLayout_); cubieBindGroupLayout_ = nullptr; }
-    if (renderTargetTexture_) { wgpuTextureRelease(renderTargetTexture_); renderTargetTexture_ = nullptr; }
-    if (readbackBuffer_)      { wgpuBufferRelease(readbackBuffer_);      readbackBuffer_      = nullptr; }
-    if (depthTextureView_) { wgpuTextureViewRelease(depthTextureView_); depthTextureView_ = nullptr; }
-    if (depthTexture_)     { wgpuTextureRelease(depthTexture_);         depthTexture_     = nullptr; }
-    if (uniformBuffer_)    { wgpuBufferRelease(uniformBuffer_);         uniformBuffer_    = nullptr; }
-    if (vertexBuffer_)     { wgpuBufferRelease(vertexBuffer_);          vertexBuffer_     = nullptr; }
-    if (hintPipeline_)     { wgpuRenderPipelineRelease(hintPipeline_);  hintPipeline_     = nullptr; }
-    if (foundPipeline_)    { wgpuRenderPipelineRelease(foundPipeline_); foundPipeline_    = nullptr; }
-    if (stickerPipeline_)  { wgpuRenderPipelineRelease(stickerPipeline_); stickerPipeline_ = nullptr; }
-    if (queue_)            { wgpuQueueRelease(queue_);                  queue_            = nullptr; }
-    if (device_)           { wgpuDeviceRelease(device_);                device_           = nullptr; }
-    if (adapter_)          { wgpuAdapterRelease(adapter_);              adapter_          = nullptr; }
-    if (surface_)          { wgpuSurfaceRelease(surface_);              surface_          = nullptr; }
-    if (instance_)         { wgpuInstanceRelease(instance_);            instance_         = nullptr; }
+    if (msaaColorTextureView_) { wgpuTextureViewRelease(msaaColorTextureView_); msaaColorTextureView_ = nullptr; }
+    if (msaaColorTexture_)     { wgpuTextureRelease(msaaColorTexture_);         msaaColorTexture_     = nullptr; }
+    if (motionTargetTexture_)  { wgpuTextureRelease(motionTargetTexture_);      motionTargetTexture_  = nullptr; }
+    if (renderTargetTexture_)  { wgpuTextureRelease(renderTargetTexture_);      renderTargetTexture_  = nullptr; }
+    if (readbackBuffer_)       { wgpuBufferRelease(readbackBuffer_);            readbackBuffer_       = nullptr; }
+    if (depthTextureViewMsaa_) { wgpuTextureViewRelease(depthTextureViewMsaa_); depthTextureViewMsaa_ = nullptr; }
+    if (depthTextureMsaa_)     { wgpuTextureRelease(depthTextureMsaa_);         depthTextureMsaa_     = nullptr; }
+    if (depthTextureView_)     { wgpuTextureViewRelease(depthTextureView_);     depthTextureView_     = nullptr; }
+    if (depthTexture_)         { wgpuTextureRelease(depthTexture_);             depthTexture_         = nullptr; }
+    if (uniformBuffer_)        { wgpuBufferRelease(uniformBuffer_);             uniformBuffer_        = nullptr; }
+    if (vertexBuffer_)         { wgpuBufferRelease(vertexBuffer_);              vertexBuffer_         = nullptr; }
+    if (hintPipelineMsaa_)     { wgpuRenderPipelineRelease(hintPipelineMsaa_);  hintPipelineMsaa_     = nullptr; }
+    if (foundPipelineMsaa_)    { wgpuRenderPipelineRelease(foundPipelineMsaa_); foundPipelineMsaa_    = nullptr; }
+    if (stickerPipelineMsaa_)  { wgpuRenderPipelineRelease(stickerPipelineMsaa_); stickerPipelineMsaa_ = nullptr; }
+    if (hintPipeline_)         { wgpuRenderPipelineRelease(hintPipeline_);      hintPipeline_         = nullptr; }
+    if (foundPipeline_)        { wgpuRenderPipelineRelease(foundPipeline_);     foundPipeline_        = nullptr; }
+    if (stickerPipeline_)      { wgpuRenderPipelineRelease(stickerPipeline_);   stickerPipeline_      = nullptr; }
+    if (queue_)                { wgpuQueueRelease(queue_);                      queue_                = nullptr; }
+    if (device_)               { wgpuDeviceRelease(device_);                    device_               = nullptr; }
+    if (adapter_)              { wgpuAdapterRelease(adapter_);                  adapter_              = nullptr; }
+    if (surface_)              { wgpuSurfaceRelease(surface_);                  surface_              = nullptr; }
+    if (instance_)             { wgpuInstanceRelease(instance_);                instance_             = nullptr; }
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,7 +1135,7 @@ bool  WebGpuRenderer::isAnimating()     const { return animator_->isAnimating();
 
 bool  WebGpuRenderer::needsRender() const {
     if (!initialized_) return false;
-    return dirty_ || dragging_ || camera_.isInertiaActive() || (animator_ && animator_->isPlaying());
+    return dirty_ || needsHighResSettleFrame_ || dragging_ || camera_.isInertiaActive() || (animator_ && animator_->isPlaying());
 }
 
 // ── Visual ────────────────────────────────────────────────────────────────

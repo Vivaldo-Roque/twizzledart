@@ -237,6 +237,16 @@ class TwizzleViewController {
     await setBodyAlpha(mode == TwizzleAppearance.crystal ? 0.3 : 1.0);
   }
 
+  /// Updates the offscreen render target resolution on desktop (Windows/Linux).
+  Future<void> setSurfaceSize(int width, int height) async {
+    try {
+      await _channel.invokeMethod('setSurfaceSize', {
+        'width': width.toDouble(),
+        'height': height.toDouble(),
+      });
+    } catch (_) {}
+  }
+
   // ── Desktop drag forwarding ───────────────────────────────────────────────
 
   Future<void> _onDragBegin(double x, double y) async {
@@ -298,12 +308,14 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
 
   int? _textureId;
   TwizzleViewController? _controller;
+  bool _isCreating = false;
+  int _currentSide = 0;
+  Timer? _resizeDebounceTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _createView();
   }
 
   @override
@@ -315,10 +327,50 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
     }
   }
 
-  Future<void> _createView() async {
+  static int _computeAlignedPhysicalSide(
+    BoxConstraints constraints,
+    double dpr,
+  ) {
+    double logicalSide = 512.0;
+    if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+      logicalSide = constraints.maxWidth < constraints.maxHeight
+          ? constraints.maxWidth
+          : constraints.maxHeight;
+    } else if (constraints.hasBoundedWidth) {
+      logicalSide = constraints.maxWidth;
+    } else if (constraints.hasBoundedHeight) {
+      logicalSide = constraints.maxHeight;
+    }
+    if (logicalSide <= 0 || logicalSide.isInfinite) {
+      logicalSide = 512.0;
+    }
+    final int rawPhysical = (logicalSide * dpr).round();
+    // Align to 64 pixels (64 * 4 = 256 bytes row pitch alignment in WebGPU)
+    final int aligned = ((rawPhysical + 63) ~/ 64) * 64;
+    return aligned.clamp(384, 1024);
+  }
+
+  void _onLayoutChanged(int targetSide) {
+    if (!_isCreating && _textureId == null) {
+      _isCreating = true;
+      _currentSide = targetSide;
+      _createView(targetSide);
+      return;
+    }
+    if (_controller != null && targetSide != _currentSide) {
+      _resizeDebounceTimer?.cancel();
+      _resizeDebounceTimer = Timer(const Duration(milliseconds: 150), () {
+        if (!mounted || _controller == null) return;
+        _currentSide = targetSide;
+        _controller!.setSurfaceSize(targetSide, targetSide);
+      });
+    }
+  }
+
+  Future<void> _createView(int side) async {
     final params = <String, dynamic>{
-      'width': 512,
-      'height': 512,
+      'width': side,
+      'height': side,
       if (widget.initialAlgorithm != null) 'initialAlgorithm': widget.initialAlgorithm,
       'speed': widget.speed,
       'touchEnabled': widget.touchEnabled,
@@ -345,6 +397,11 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
         _controller = controller;
       });
 
+      // If layout changed while createView was in flight, sync surface size
+      if (_currentSide != side) {
+        controller.setSurfaceSize(_currentSide, _currentSide);
+      }
+
       widget.onViewCreated?.call(controller);
     } on PlatformException catch (e) {
       debugPrint('[TwizzleView] createView failed: ${e.message}');
@@ -353,6 +410,7 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
 
   @override
   void dispose() {
+    _resizeDebounceTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     if (_textureId != null) {
       _mainChannel.invokeMethod('disposeView', {'textureId': _textureId}).ignore();
@@ -370,40 +428,49 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
 
   @override
   Widget build(BuildContext context) {
-    if (_textureId == null) {
-      return const SizedBox.shrink();
-    }
+    final double dpr = MediaQuery.devicePixelRatioOf(context);
 
-    Widget view = Center(
-      child: AspectRatio(
-        aspectRatio: 1.0,
-        child: Texture(
-          textureId: _textureId!,
-          filterQuality: FilterQuality.medium,
-        ),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final int targetSide = _computeAlignedPhysicalSide(constraints, dpr);
+        _onLayoutChanged(targetSide);
+
+        if (_textureId == null) {
+          return const SizedBox.shrink();
+        }
+
+        Widget view = Center(
+          child: AspectRatio(
+            aspectRatio: 1.0,
+            child: Texture(
+              textureId: _textureId!,
+              filterQuality: FilterQuality.high,
+            ),
+          ),
+        );
+
+        if (widget.touchEnabled) {
+          view = GestureDetector(
+            onPanStart:  _handleDragStart,
+            onPanUpdate: _handleDragUpdate,
+            onPanEnd:    _handleDragEnd,
+            onTap:       widget.onTap,
+            behavior:    HitTestBehavior.opaque,
+            child: SizedBox.expand(child: view),
+          );
+        } else if (widget.onTap != null) {
+          view = GestureDetector(
+            onTap: widget.onTap,
+            behavior: HitTestBehavior.opaque,
+            child: SizedBox.expand(child: view),
+          );
+        } else {
+          view = SizedBox.expand(child: view);
+        }
+
+        return view;
+      },
     );
-
-    if (widget.touchEnabled) {
-      view = GestureDetector(
-        onPanStart:  _handleDragStart,
-        onPanUpdate: _handleDragUpdate,
-        onPanEnd:    _handleDragEnd,
-        onTap:       widget.onTap,
-        behavior:    HitTestBehavior.opaque,
-        child: SizedBox.expand(child: view),
-      );
-    } else if (widget.onTap != null) {
-      view = GestureDetector(
-        onTap: widget.onTap,
-        behavior: HitTestBehavior.opaque,
-        child: SizedBox.expand(child: view),
-      );
-    } else {
-      view = SizedBox.expand(child: view);
-    }
-
-    return view;
   }
 }
 

@@ -111,6 +111,11 @@ public:
     bool  needsRender() const;
     void  markDirty() { dirty_ = true; }
 
+    /// Width and height of the most recently rendered offscreen frame
+    /// (supports Dynamic Resolution Scaling between motion and resting frames).
+    uint32_t lastRenderedWidth()  const { return lastRenderedWidth_; }
+    uint32_t lastRenderedHeight() const { return lastRenderedHeight_; }
+
     // ── Visual properties ─────────────────────────────────────────────────
     void  setSpeed          (float speed);
     float getSpeed          () const;
@@ -133,6 +138,11 @@ private:
     WGPURenderPipeline foundPipeline_   = nullptr;
     WGPURenderPipeline stickerPipeline_ = nullptr;
 
+    // 4x MSAA pipelines for high-resolution resting frames in offscreen mode
+    WGPURenderPipeline hintPipelineMsaa_    = nullptr;
+    WGPURenderPipeline foundPipelineMsaa_   = nullptr;
+    WGPURenderPipeline stickerPipelineMsaa_ = nullptr;
+
     // Buffers
     WGPUBuffer vertexBuffer_  = nullptr;
     WGPUBuffer uniformBuffer_ = nullptr;
@@ -144,9 +154,11 @@ private:
     std::vector<WGPUBindGroup> cubieBindGroups_;
     std::vector<uint8_t>       uniformStagingBuffer_;
 
-    // Depth-stencil texture
-    WGPUTexture     depthTexture_     = nullptr;
-    WGPUTextureView depthTextureView_ = nullptr;
+    // Depth-stencil texture (1x for surface / motion offscreen, 4x MSAA for resting offscreen)
+    WGPUTexture     depthTexture_         = nullptr;
+    WGPUTextureView depthTextureView_     = nullptr;
+    WGPUTexture     depthTextureMsaa_     = nullptr;
+    WGPUTextureView depthTextureViewMsaa_ = nullptr;
 
     // ── Cube state ────────────────────────────────────────────────────────
     std::vector<Vertex>    vertices_;
@@ -168,12 +180,21 @@ private:
     bool     dragging_  = false;
     float    lastDragX_ = 0, lastDragY_ = 0;
 
-    // Offscreen render targets
-    bool        isOffscreen_          = false;
-    WGPUTexture renderTargetTexture_  = nullptr;
-    WGPUBuffer  readbackBuffer_       = nullptr;
-    uint32_t    bytesPerRow_          = 0;
-    uint32_t    bufferSize_           = 0;
+    // Offscreen render targets (Dual-Target: 1x Motion + 4x MSAA Resting)
+    bool            isOffscreen_             = false;
+    WGPUTexture     renderTargetTexture_     = nullptr; ///< 1x resolve target (full width_ x height_)
+    WGPUTexture     msaaColorTexture_        = nullptr; ///< 4x MSAA color attachment (full width_ x height_)
+    WGPUTextureView msaaColorTextureView_    = nullptr;
+    WGPUTexture     motionTargetTexture_     = nullptr; ///< 1x motion target (motionWidth_ x motionHeight_)
+    WGPUBuffer      readbackBuffer_          = nullptr;
+    uint32_t        bytesPerRow_             = 0;
+    uint32_t        bufferSize_              = 0;
+    uint32_t        motionWidth_             = 1;
+    uint32_t        motionHeight_            = 1;
+    uint32_t        motionBytesPerRow_       = 0;
+    uint32_t        lastRenderedWidth_       = 1;
+    uint32_t        lastRenderedHeight_      = 1;
+    bool            needsHighResSettleFrame_ = false;
 
     // ── Internal helpers ──────────────────────────────────────────────────
 

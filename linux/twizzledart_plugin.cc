@@ -174,6 +174,11 @@ static void RenderLoop(LinuxCubeViewInstance* inst) {
       if (inst->renderer && inst->pixelBuffer) {
         frameRendered = inst->renderer->renderToBuffer(dt, inst->pixelBuffer.get());
         stillNeedsRender = inst->renderer->needsRender();
+        if (frameRendered && inst->flTexture) {
+          auto* tex = TWIZZLE_LINUX_TEXTURE(inst->flTexture);
+          tex->width  = inst->renderer->lastRenderedWidth();
+          tex->height = inst->renderer->lastRenderedHeight();
+        }
       }
     }
 
@@ -336,6 +341,25 @@ static void HandleViewMethodCall(
       if (r && args) {
         r->onZoom((float)GetFlDouble(args, "delta"));
         shouldWake = true;
+      }
+      response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    } else if (strcmp(method, "setSurfaceSize") == 0) {
+      if (r && args) {
+        uint32_t w = (uint32_t)std::max(64.0, GetFlDouble(args, "width", 512.0));
+        uint32_t h = (uint32_t)std::max(64.0, GetFlDouble(args, "height", 512.0));
+        if (w != inst->bufferWidth || h != inst->bufferHeight) {
+          inst->bufferWidth  = w;
+          inst->bufferHeight = h;
+          inst->pixelBuffer  = std::make_unique<uint8_t[]>(w * h * 4);
+          if (inst->flTexture) {
+            auto* tex = TWIZZLE_LINUX_TEXTURE(inst->flTexture);
+            tex->buffer = inst->pixelBuffer.get();
+            tex->width  = w;
+            tex->height = h;
+          }
+          r->resize(w, h);
+          shouldWake = true;
+        }
       }
       response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
     } else {

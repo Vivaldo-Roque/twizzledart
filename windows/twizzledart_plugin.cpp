@@ -199,10 +199,17 @@ void TwizzledartPlugin::OnCreateView(
     auto textureVariant = std::make_unique<flutter::TextureVariant>(
         flutter::PixelBufferTexture(
             [rawInst](size_t w, size_t h) -> const FlutterDesktopPixelBuffer* {
+                (void)w;
+                (void)h;
                 std::lock_guard<std::mutex> lock(rawInst->rendererMutex);
                 rawInst->flutterPixelBuffer.buffer = rawInst->pixelBuffer.get();
-                rawInst->flutterPixelBuffer.width  = rawInst->bufferWidth;
-                rawInst->flutterPixelBuffer.height = rawInst->bufferHeight;
+                if (rawInst->renderer) {
+                    rawInst->flutterPixelBuffer.width  = rawInst->renderer->lastRenderedWidth();
+                    rawInst->flutterPixelBuffer.height = rawInst->renderer->lastRenderedHeight();
+                } else {
+                    rawInst->flutterPixelBuffer.width  = rawInst->bufferWidth;
+                    rawInst->flutterPixelBuffer.height = rawInst->bufferHeight;
+                }
                 return &rawInst->flutterPixelBuffer;
             }));
 
@@ -496,6 +503,20 @@ void TwizzledartPlugin::HandleViewMethodCall(
                 float delta = (float)GetDouble(*args, "delta");
                 r->onZoom(delta);
                 shouldWake = true;
+            }
+            result->Success();
+
+        } else if (method == "setSurfaceSize") {
+            if (r && args) {
+                uint32_t w = (uint32_t)std::max(64.0, GetDouble(*args, "width", 512.0));
+                uint32_t h = (uint32_t)std::max(64.0, GetDouble(*args, "height", 512.0));
+                if (w != inst->bufferWidth || h != inst->bufferHeight) {
+                    inst->bufferWidth  = w;
+                    inst->bufferHeight = h;
+                    inst->pixelBuffer  = std::make_unique<uint8_t[]>(w * h * 4);
+                    r->resize(w, h);
+                    shouldWake = true;
+                }
             }
             result->Success();
 

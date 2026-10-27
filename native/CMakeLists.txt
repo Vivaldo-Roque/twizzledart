@@ -77,6 +77,7 @@ set(WGPU_DOWNLOAD_URL
 FetchContent_Declare(
   wgpu_native
   URL ${WGPU_DOWNLOAD_URL}
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(wgpu_native)
 
