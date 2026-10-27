@@ -51,6 +51,8 @@ bool CubeRenderer::init() {
 }
 
 void CubeRenderer::uploadGeometry() {
+    if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
+    if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
     glBindVertexArray(vao_);

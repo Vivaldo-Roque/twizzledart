@@ -96,13 +96,22 @@ TwizzledartPlugin::TwizzledartPlugin(flutter::PluginRegistrarWindows* registrar)
 }
 
 TwizzledartPlugin::~TwizzledartPlugin() {
-    // Stop all render loops
+    if (channel_) {
+        channel_->SetMethodCallHandler(nullptr);
+    }
+    // Stop all render loops and release resources
     std::lock_guard<std::mutex> lock(instancesMutex_);
     for (auto& [id, inst] : instances_) {
+        if (inst->viewChannel) {
+            inst->viewChannel->SetMethodCallHandler(nullptr);
+        }
         inst->running = false;
         inst->wakeCv.notify_all();
         if (inst->renderThread.joinable()) inst->renderThread.join();
+        registrar_->texture_registrar()->UnregisterTexture(id);
+        if (inst->renderer) inst->renderer->destroy();
     }
+    instances_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +205,7 @@ void TwizzledartPlugin::OnCreateView(
 
     // ── Register Flutter PixelBufferTexture ──────────────────────────────
     auto* rawInst = inst.get();
-    auto textureVariant = std::make_unique<flutter::TextureVariant>(
+    inst->textureVariant = std::make_unique<flutter::TextureVariant>(
         flutter::PixelBufferTexture(
             [rawInst](size_t w, size_t h) -> const FlutterDesktopPixelBuffer* {
                 (void)w;
@@ -214,10 +223,7 @@ void TwizzledartPlugin::OnCreateView(
             }));
 
     inst->textureId = registrar_->texture_registrar()->RegisterTexture(
-        textureVariant.get());
-
-    struct TextureHolder { std::unique_ptr<flutter::TextureVariant> variant; };
-    auto* holder = new TextureHolder{std::move(textureVariant)};
+        inst->textureVariant.get());
     inst->renderer = nullptr;
 
     // ── Initialise WebGpuRenderer (pure offscreen rendering, no native HWND)
@@ -261,7 +267,6 @@ void TwizzledartPlugin::OnCreateView(
         RenderLoop(rawInst);
     });
 
-    (void)holder;
     (void)touchEnabled;
 
     int64_t registeredId = inst->textureId;
@@ -289,11 +294,16 @@ void TwizzledartPlugin::OnDisposeView(int64_t textureId) {
         instances_.erase(it);
     }
 
+    if (inst->viewChannel) {
+        inst->viewChannel->SetMethodCallHandler(nullptr);
+    }
+
     inst->running = false;
     inst->wakeCv.notify_all();
     if (inst->renderThread.joinable()) inst->renderThread.join();
 
     registrar_->texture_registrar()->UnregisterTexture(textureId);
+    inst->textureVariant.reset();
     if (inst->renderer) inst->renderer->destroy();
 }
 

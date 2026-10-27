@@ -53,6 +53,16 @@ class MetalView: UIView {
     }
 }
 
+private class DisplayLinkProxy {
+    weak var target: TwizzlePlatformView?
+    init(_ target: TwizzlePlatformView) {
+        self.target = target
+    }
+    @objc func onFrame() {
+        target?.renderFrame()
+    }
+}
+
 class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDelegate {
     private var _view: MetalView
     private var renderer: WebGpuRendererWrapper?
@@ -120,7 +130,8 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
         setupGestures()
         
         lastTime = CACurrentMediaTime()
-        displayLink = CADisplayLink(target: self, selector: #selector(renderFrame))
+        let proxy = DisplayLinkProxy(self)
+        displayLink = CADisplayLink(target: proxy, selector: #selector(DisplayLinkProxy.onFrame))
         if #available(iOS 15.0, *) {
             displayLink?.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
         }
@@ -330,7 +341,9 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
     }
     
     deinit {
+        channel.setMethodCallHandler(nil)
         displayLink?.invalidate()
+        displayLink = nil
         renderer?.destroy()
     }
 }

@@ -209,16 +209,16 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
 
     // 2. Platform Surface (only when not offscreen)
     if (!isOffscreen_) {
-        if (!createSurface(desc)) return false;
+        if (!createSurface(desc)) { destroy(); return false; }
     }
 
     // 3. Adapter
     adapter_ = requestAdapterSync(instance_, isOffscreen_ ? nullptr : surface_);
-    if (!adapter_) { std::fprintf(stderr, "[Twizzle] No suitable WebGPU adapter\n"); return false; }
+    if (!adapter_) { std::fprintf(stderr, "[Twizzle] No suitable WebGPU adapter\n"); destroy(); return false; }
 
     // 4. Device + Queue
     device_ = requestDeviceSync(adapter_);
-    if (!device_) { std::fprintf(stderr, "[Twizzle] WebGPU device creation failed\n"); return false; }
+    if (!device_) { std::fprintf(stderr, "[Twizzle] WebGPU device creation failed\n"); destroy(); return false; }
     queue_ = wgpuDeviceGetQueue(device_);
 
     // 5. Configure swap-chain or offscreen target
@@ -239,7 +239,7 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
     createUniformBuffer();
 
     // 9. Render pipeline + persistent bind groups
-    if (!createPipeline()) return false;
+    if (!createPipeline()) { destroy(); return false; }
 
     // 10. Animator
     animator_ = std::make_unique<MoveAnimator>(cubies_);
@@ -307,6 +307,7 @@ void WebGpuRenderer::configureSurface() {
             }
         }
     }
+    wgpuSurfaceCapabilitiesFreeMembers(caps);
 #else
     fmt = WGPUTextureFormat_RGBA8Unorm;
 #endif
@@ -636,6 +637,7 @@ bool WebGpuRenderer::createPipeline() {
 
     rpd.depthStencil       = &dssHint;
     rpd.primitive.cullMode = WGPUCullMode_Front;
+    if (hintPipeline_) wgpuRenderPipelineRelease(hintPipeline_);
     hintPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
 
     // ── 2. Foundation Pipeline (Back culling, depth write enabled for opaque)
@@ -645,6 +647,7 @@ bool WebGpuRenderer::createPipeline() {
 
     rpd.depthStencil       = &dssFound;
     rpd.primitive.cullMode = WGPUCullMode_Back;
+    if (foundPipeline_) wgpuRenderPipelineRelease(foundPipeline_);
     foundPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
 
     // ── 3. Sticker Pipeline (Opaque, Back culling, depth write enabled)
@@ -663,6 +666,7 @@ bool WebGpuRenderer::createPipeline() {
     rpd.fragment           = &fsOpaque;
     rpd.depthStencil       = &dssSticker;
     rpd.primitive.cullMode = WGPUCullMode_Back;
+    if (stickerPipeline_) wgpuRenderPipelineRelease(stickerPipeline_);
     stickerPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
 
     // ── 4x MSAA Pipelines for High-Res Resting Frame in Offscreen Mode ──────
@@ -671,15 +675,18 @@ bool WebGpuRenderer::createPipeline() {
         rpd.fragment           = &fs;
         rpd.depthStencil       = &dssHint;
         rpd.primitive.cullMode = WGPUCullMode_Front;
+        if (hintPipelineMsaa_) wgpuRenderPipelineRelease(hintPipelineMsaa_);
         hintPipelineMsaa_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
 
         rpd.depthStencil       = &dssFound;
         rpd.primitive.cullMode = WGPUCullMode_Back;
+        if (foundPipelineMsaa_) wgpuRenderPipelineRelease(foundPipelineMsaa_);
         foundPipelineMsaa_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
 
         rpd.fragment           = &fsOpaque;
         rpd.depthStencil       = &dssSticker;
         rpd.primitive.cullMode = WGPUCullMode_Back;
+        if (stickerPipelineMsaa_) wgpuRenderPipelineRelease(stickerPipelineMsaa_);
         stickerPipelineMsaa_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
     }
 
@@ -765,6 +772,9 @@ void WebGpuRenderer::resize(uint32_t width, uint32_t height) {
         configureSurface();
     }
     createDepthTexture();
+    if (device_) {
+        wgpuDevicePoll(device_, true, nullptr);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -822,6 +832,10 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     } else {
         wgpuSurfaceGetCurrentTexture(surface_, &st);
         if (st.status != WGPUSurfaceGetCurrentTextureStatus_Success) {
+            if (st.texture) {
+                wgpuTextureRelease(st.texture);
+                st.texture = nullptr;
+            }
             if (st.status == WGPUSurfaceGetCurrentTextureStatus_Outdated ||
                 st.status == WGPUSurfaceGetCurrentTextureStatus_Lost) {
                 configureSurface();
@@ -832,7 +846,13 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
         backbuffer = wgpuTextureCreateView(st.texture, nullptr);
     }
 
-    if (!backbuffer) { dirty_ = true; return false; }
+    if (!backbuffer) {
+        if (st.texture) {
+            wgpuTextureRelease(st.texture);
+        }
+        dirty_ = true;
+        return false;
+    }
 
     // ── Build VP + Cubie uniform data in a single staging buffer ────────
     glm::mat4 vp = camera_.projection() * camera_.view();
@@ -1006,6 +1026,7 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
                     lastRenderedHeight_ = activeHeight;
                     return true;
                 }
+                wgpuBufferUnmap(readbackBuffer_);
             }
         }
         return false;
@@ -1021,13 +1042,19 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
 // ---------------------------------------------------------------------------
 
 void WebGpuRenderer::destroy() {
-    if (!initialized_) return;
     initialized_ = false;
+#if defined(__ANDROID__)
+    wgpuSetLogCallback(nullptr, nullptr);
+#endif
+    if (device_) {
+        wgpuDevicePoll(device_, true, nullptr);
+    }
     if (frameBindGroup_) { wgpuBindGroupRelease(frameBindGroup_); frameBindGroup_ = nullptr; }
     for (auto bg : cubieBindGroups_) {
         if (bg) wgpuBindGroupRelease(bg);
     }
     cubieBindGroups_.clear();
+    cubieBindGroups_.shrink_to_fit();
     if (frameBindGroupLayout_) { wgpuBindGroupLayoutRelease(frameBindGroupLayout_); frameBindGroupLayout_ = nullptr; }
     if (cubieBindGroupLayout_) { wgpuBindGroupLayoutRelease(cubieBindGroupLayout_); cubieBindGroupLayout_ = nullptr; }
     if (msaaColorTextureView_) { wgpuTextureViewRelease(msaaColorTextureView_); msaaColorTextureView_ = nullptr; }
@@ -1047,11 +1074,22 @@ void WebGpuRenderer::destroy() {
     if (hintPipeline_)         { wgpuRenderPipelineRelease(hintPipeline_);      hintPipeline_         = nullptr; }
     if (foundPipeline_)        { wgpuRenderPipelineRelease(foundPipeline_);     foundPipeline_        = nullptr; }
     if (stickerPipeline_)      { wgpuRenderPipelineRelease(stickerPipeline_);   stickerPipeline_      = nullptr; }
+    if (device_) {
+        wgpuDevicePoll(device_, true, nullptr);
+    }
     if (queue_)                { wgpuQueueRelease(queue_);                      queue_                = nullptr; }
     if (device_)               { wgpuDeviceRelease(device_);                    device_               = nullptr; }
     if (adapter_)              { wgpuAdapterRelease(adapter_);                  adapter_              = nullptr; }
     if (surface_)              { wgpuSurfaceRelease(surface_);                  surface_              = nullptr; }
     if (instance_)             { wgpuInstanceRelease(instance_);                instance_             = nullptr; }
+
+    vertices_.clear();
+    vertices_.shrink_to_fit();
+    cubies_.clear();
+    cubies_.shrink_to_fit();
+    uniformStagingBuffer_.clear();
+    uniformStagingBuffer_.shrink_to_fit();
+    animator_.reset();
 }
 
 // ---------------------------------------------------------------------------

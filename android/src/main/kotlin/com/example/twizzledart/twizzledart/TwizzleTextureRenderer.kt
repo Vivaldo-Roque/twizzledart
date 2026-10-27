@@ -76,12 +76,15 @@ class TwizzleTextureRenderer(context: Context) :
             nativeDestroy(nativeHandle)
             nativeHandle = 0L
         }
+        var surface: Surface? = null
         try {
-            val surface = Surface(surfaceTexture)
+            surface = Surface(surfaceTexture)
             nativeHandle = nativeCreate(surface, width, height)
         } catch (e: Throwable) {
             android.util.Log.e("TwizzleTextureRenderer", "Failed to create native renderer: ${e.message}", e)
             nativeHandle = 0L
+        } finally {
+            surface?.release()
         }
 
         if (nativeHandle == 0L) return

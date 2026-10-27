@@ -32,11 +32,12 @@ namespace twizzledart {
 struct CubeViewInstance {
     int64_t textureId = -1;
 
-    // Flutter external texture pixel buffer
+    // Flutter external texture pixel buffer & variant
     std::unique_ptr<uint8_t[]> pixelBuffer;
     uint32_t bufferWidth  = 0;
     uint32_t bufferHeight = 0;
     FlutterDesktopPixelBuffer flutterPixelBuffer{};
+    std::unique_ptr<flutter::TextureVariant> textureVariant;
 
     // WebGPU renderer (renders to offscreen surface, then readback to pixelBuffer)
     std::unique_ptr<twizzle::renderer::WebGpuRenderer> renderer;

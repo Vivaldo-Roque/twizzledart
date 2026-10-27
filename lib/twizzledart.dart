@@ -264,6 +264,11 @@ class TwizzleViewController {
     catch (_) {}
   }
 
+  /// Releases the MethodChannel handler and callbacks associated with this controller.
+  void dispose() {
+    onTap = null;
+    _channel.setMethodCallHandler(null);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +392,11 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
 
     try {
       final int? texId = await _mainChannel.invokeMethod<int>('createView', params);
-      if (!mounted || texId == null || texId < 0) return;
+      if (texId == null || texId < 0) return;
+      if (!mounted) {
+        _mainChannel.invokeMethod('disposeView', {'textureId': texId}).ignore();
+        return;
+      }
 
       final controller = TwizzleViewController._(texId);
       if (widget.onTap != null) controller.onTap = widget.onTap;
@@ -412,6 +421,8 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
   void dispose() {
     _resizeDebounceTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    _controller?.dispose();
+    _controller = null;
     if (_textureId != null) {
       _mainChannel.invokeMethod('disposeView', {'textureId': _textureId}).ignore();
     }
@@ -483,7 +494,7 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
 /// - **Android**: WebGPU via AndroidView (TextureView).
 /// - **Windows & Linux**: WebGPU via Flutter Texture API.
 /// - **iOS & macOS**: WebGPU Metal backend via UiKitView / AppKitView.
-class TwizzleView extends StatelessWidget {
+class TwizzleView extends StatefulWidget {
   /// The initial sequence of moves (e.g., scramble or algorithm in WCA notation)
   /// applied to the cube when the view is initialized.
   final String? initialAlgorithm;
@@ -551,23 +562,37 @@ class TwizzleView extends StatelessWidget {
   });
 
   @override
+  State<TwizzleView> createState() => _TwizzleViewState();
+}
+
+class _TwizzleViewState extends State<TwizzleView> {
+  TwizzleViewController? _platformController;
+
+  @override
+  void dispose() {
+    _platformController?.dispose();
+    _platformController = null;
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     // ── Windows & Linux: WebGPU via Flutter Texture API ─────────────────────
     if (defaultTargetPlatform == TargetPlatform.windows ||
         defaultTargetPlatform == TargetPlatform.linux) {
       return _TwizzleWindowsView(
-        initialAlgorithm: initialAlgorithm,
-        speed: speed,
-        backgroundColor: backgroundColor,
-        cameraPosition: cameraPosition,
-        touchEnabled: touchEnabled,
-        pitchLock: pitchLock,
-        debugLogs: debugLogs,
-        faceColors: faceColors,
-        appearance: appearance,
-        bodyAlpha: bodyAlpha,
-        onViewCreated: onViewCreated,
-        onTap: onTap,
+        initialAlgorithm: widget.initialAlgorithm,
+        speed: widget.speed,
+        backgroundColor: widget.backgroundColor,
+        cameraPosition: widget.cameraPosition,
+        touchEnabled: widget.touchEnabled,
+        pitchLock: widget.pitchLock,
+        debugLogs: widget.debugLogs,
+        faceColors: widget.faceColors,
+        appearance: widget.appearance,
+        bodyAlpha: widget.bodyAlpha,
+        onViewCreated: widget.onViewCreated,
+        onTap: widget.onTap,
       );
     }
 
@@ -575,18 +600,18 @@ class TwizzleView extends StatelessWidget {
     if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.macOS) {
       const String viewType = 'twizzle_view';
       final Map<String, dynamic> creationParams = <String, dynamic>{
-        if (initialAlgorithm != null) 'initialAlgorithm': initialAlgorithm,
-        'speed': speed,
-        'touchEnabled': touchEnabled,
-        'pitchLock': pitchLock,
-        'debugLogs': debugLogs,
-        if (backgroundColor != null) 'backgroundColor': backgroundColor,
-        if (cameraPosition != null) 'cameraPosition': cameraPosition,
-        if (faceColors != null) 'faceColors': faceColors,
-        if (appearance != null)
-          'bodyAlpha': appearance == TwizzleAppearance.crystal ? 0.3 : 1.0
-        else if (bodyAlpha != null)
-          'bodyAlpha': bodyAlpha,
+        if (widget.initialAlgorithm != null) 'initialAlgorithm': widget.initialAlgorithm,
+        'speed': widget.speed,
+        'touchEnabled': widget.touchEnabled,
+        'pitchLock': widget.pitchLock,
+        'debugLogs': widget.debugLogs,
+        if (widget.backgroundColor != null) 'backgroundColor': widget.backgroundColor,
+        if (widget.cameraPosition != null) 'cameraPosition': widget.cameraPosition,
+        if (widget.faceColors != null) 'faceColors': widget.faceColors,
+        if (widget.appearance != null)
+          'bodyAlpha': widget.appearance == TwizzleAppearance.crystal ? 0.3 : 1.0
+        else if (widget.bodyAlpha != null)
+          'bodyAlpha': widget.bodyAlpha,
       };
       if (defaultTargetPlatform == TargetPlatform.android) {
         return PlatformViewLink(
@@ -641,10 +666,13 @@ class TwizzleView extends StatelessWidget {
   }
 
   void _onPlatformViewCreated(int id) {
-    if (onViewCreated != null) {
+    if (!mounted) return;
+    _platformController?.dispose();
+    if (widget.onViewCreated != null || widget.onTap != null) {
       final controller = TwizzleViewController._(id);
-      if (onTap != null) controller.onTap = onTap;
-      onViewCreated!(controller);
+      _platformController = controller;
+      if (widget.onTap != null) controller.onTap = widget.onTap;
+      widget.onViewCreated?.call(controller);
     }
   }
 }
