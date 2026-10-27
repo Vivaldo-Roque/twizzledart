@@ -152,6 +152,7 @@ void TwizzledartPlugin::OnCreateView(
 
     // Parse creation params (mirrors Android TwizzledartPlugin)
     std::string initialAlgorithm = GetString(*args, "initialAlgorithm");
+    std::string qualityProfile   = GetString(*args, "qualityProfile", "auto");
     double speed                 = GetDouble(*args, "speed",       1.0);
     bool   touchEnabled          = GetBool  (*args, "touchEnabled", true);
     bool   pitchLock             = GetBool  (*args, "pitchLock",    true);
@@ -241,6 +242,13 @@ void TwizzledartPlugin::OnCreateView(
             renderer->setPitchLock(pitchLock);
             renderer->setCameraPosition((float)camLat, (float)camLon, (float)camRad);
             renderer->setBodyAlpha((float)bodyAlpha);
+            if (qualityProfile == "ultra") {
+                renderer->setQualityProfile(twizzle::renderer::QualityProfile::Ultra);
+            } else if (qualityProfile == "batterySaver") {
+                renderer->setQualityProfile(twizzle::renderer::QualityProfile::BatterySaver);
+            } else {
+                renderer->setQualityProfile(twizzle::renderer::QualityProfile::Auto);
+            }
             if (hasFaceColors) renderer->setFaceColors(faceColors);
             if (!initialAlgorithm.empty()) renderer->applyAlgorithm(initialAlgorithm);
         }
@@ -527,6 +535,17 @@ void TwizzledartPlugin::HandleViewMethodCall(
                     r->resize(w, h);
                     shouldWake = true;
                 }
+            }
+            result->Success();
+
+        } else if (method == "setQualityProfile") {
+            if (r && args) {
+                std::string mode = GetString(*args, "profile", "auto");
+                auto p = twizzle::renderer::QualityProfile::Auto;
+                if (mode == "ultra") p = twizzle::renderer::QualityProfile::Ultra;
+                else if (mode == "batterySaver") p = twizzle::renderer::QualityProfile::BatterySaver;
+                r->setQualityProfile(p);
+                shouldWake = true;
             }
             result->Success();
 

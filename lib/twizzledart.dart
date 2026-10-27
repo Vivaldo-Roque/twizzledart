@@ -16,6 +16,21 @@ enum TwizzleAppearance {
   normal,
 }
 
+/// Visual quality and performance profile for 3D cube rendering.
+enum TwizzleQualityMode {
+  /// Automatic (Recommended): profiles hardware capabilities via WebGPU. Discrete GPUs
+  /// (NVIDIA, AMD) and fast integrated GPUs render at 100% native resolution + 4x MSAA
+  /// continuously even during rotations. Lightweight motion scaling is only engaged if
+  /// running on lower-end hardware with frame times exceeding the 60 FPS budget.
+  auto,
+
+  /// Always renders at 100% native resolution + 4x MSAA continuously, even during active motion.
+  ultra,
+
+  /// Always scales to a lightweight target during 60 FPS movement to maximize battery life.
+  batterySaver,
+}
+
 /// Controller to apply algorithms and manage the state of a [TwizzleView].
 class TwizzleViewController {
   final int _id;
@@ -247,6 +262,15 @@ class TwizzleViewController {
     } catch (_) {}
   }
 
+  /// Sets the visual quality and performance profile (auto, ultra, batterySaver).
+  Future<void> setQualityMode(TwizzleQualityMode mode) async {
+    try {
+      await _channel.invokeMethod('setQualityProfile', {
+        'profile': mode.name,
+      });
+    } catch (_) {}
+  }
+
   // ── Desktop drag forwarding ───────────────────────────────────────────────
 
   Future<void> _onDragBegin(double x, double y) async {
@@ -284,6 +308,9 @@ class _TwizzleWindowsView extends StatefulWidget {
   final bool debugLogs;
   final List<double>? faceColors;
   final TwizzleAppearance? appearance;
+
+  /// Visual quality and performance profile. Defaults to [TwizzleQualityMode.auto].
+  final TwizzleQualityMode qualityMode;
   final double? bodyAlpha;
   final TwizzleViewCreatedCallback? onViewCreated;
   final VoidCallback? onTap;
@@ -298,6 +325,7 @@ class _TwizzleWindowsView extends StatefulWidget {
     this.debugLogs = false,
     this.faceColors,
     this.appearance,
+    this.qualityMode = TwizzleQualityMode.auto,
     this.bodyAlpha,
     this.onViewCreated,
     this.onTap,
@@ -376,6 +404,7 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
     final params = <String, dynamic>{
       'width': side,
       'height': side,
+      'qualityProfile': widget.qualityMode.name,
       if (widget.initialAlgorithm != null) 'initialAlgorithm': widget.initialAlgorithm,
       'speed': widget.speed,
       'touchEnabled': widget.touchEnabled,
@@ -527,6 +556,9 @@ class TwizzleView extends StatefulWidget {
   /// If both [appearance] and [bodyAlpha] are provided, [appearance] takes precedence.
   final TwizzleAppearance? appearance;
 
+  /// Visual quality and performance profile. Defaults to [TwizzleQualityMode.auto].
+  final TwizzleQualityMode qualityMode;
+
   /// The raw opacity of the cubie body/foundation, from `0.0` to `1.0`.
   /// Only used when [appearance] is not set.
   final double? bodyAlpha;
@@ -556,6 +588,7 @@ class TwizzleView extends StatefulWidget {
     this.debugLogs = false,
     this.faceColors,
     this.appearance,
+    this.qualityMode = TwizzleQualityMode.auto,
     this.bodyAlpha,
     this.onViewCreated,
     this.onTap,
@@ -590,6 +623,7 @@ class _TwizzleViewState extends State<TwizzleView> {
         debugLogs: widget.debugLogs,
         faceColors: widget.faceColors,
         appearance: widget.appearance,
+        qualityMode: widget.qualityMode,
         bodyAlpha: widget.bodyAlpha,
         onViewCreated: widget.onViewCreated,
         onTap: widget.onTap,

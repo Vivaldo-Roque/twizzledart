@@ -46,6 +46,13 @@ struct SurfaceDescriptor {
     bool     isOffscreen = false;
 };
 
+/// Performance and visual quality profile for 3D rendering.
+enum class QualityProfile {
+    Auto,         ///< Automatic: full native + 4x MSAA on discrete/fast GPUs; DRS only if frame time > 8ms on low-end iGPU
+    Ultra,        ///< Always maximum resolution + 4x MSAA continuously (even during motion)
+    BatterySaver, ///< Always use lightweight motion target during 60 FPS movement to save battery
+};
+
 class WebGpuRenderer {
 public:
     WebGpuRenderer();
@@ -126,6 +133,9 @@ public:
     void  setDebugLogs      (bool  enabled);
     void  setFaceColors     (const float colors[6][3]);
     void  setBodyAlpha      (float alpha);
+    void  setQualityProfile (QualityProfile profile);
+    QualityProfile getQualityProfile() const { return qualityProfile_; }
+    bool  isDiscreteGpu     () const { return adapterType_ == WGPUAdapterType_DiscreteGPU; }
 
 private:
     // ── WebGPU objects ────────────────────────────────────────────────────
@@ -195,6 +205,9 @@ private:
     uint32_t        lastRenderedWidth_       = 1;
     uint32_t        lastRenderedHeight_      = 1;
     bool            needsHighResSettleFrame_ = false;
+    WGPUAdapterType adapterType_             = WGPUAdapterType_Unknown;
+    QualityProfile  qualityProfile_          = QualityProfile::Auto;
+    float           lastFrameDurationMs_     = 0.0f;
 
     // ── Internal helpers ──────────────────────────────────────────────────
 

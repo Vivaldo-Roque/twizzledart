@@ -216,6 +216,20 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
     adapter_ = requestAdapterSync(instance_, isOffscreen_ ? nullptr : surface_);
     if (!adapter_) { std::fprintf(stderr, "[Twizzle] No suitable WebGPU adapter\n"); destroy(); return false; }
 
+    // Detect GPU architecture (Discrete, Integrated, CPU) to optimize quality/power profile
+    {
+        WGPUAdapterInfo adapterInfo = {};
+        wgpuAdapterGetInfo(adapter_, &adapterInfo);
+        adapterType_ = adapterInfo.adapterType;
+        if (debugLogs_) {
+            std::fprintf(stderr, "[Twizzle] 3D Adapter: %s (%s), type=0x%x\n",
+                         adapterInfo.description ? adapterInfo.description : "unknown",
+                         adapterInfo.device ? adapterInfo.device : "unknown",
+                         (unsigned)adapterType_);
+        }
+        wgpuAdapterInfoFreeMembers(adapterInfo);
+    }
+
     // 4. Device + Queue
     device_ = requestDeviceSync(adapter_);
     if (!device_) { std::fprintf(stderr, "[Twizzle] WebGPU device creation failed\n"); destroy(); return false; }
@@ -792,6 +806,7 @@ bool WebGpuRenderer::renderToBuffer(float dt, uint8_t* destBuffer) {
 bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     if (!initialized_) return false;
 
+    auto frameStartTime = std::chrono::steady_clock::now();
     dirty_ = false;
 
     float now = nowSeconds();
@@ -804,7 +819,29 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
 
     const bool inMotion = isOffscreen_ &&
         (dragging_ || camera_.isInertiaActive() || (animator_ && animator_->isPlaying()));
-    const bool useMsaaResting = isOffscreen_ && !inMotion &&
+
+    // Adaptive Quality & Performance profiling:
+    // - Ultra mode: NEVER scale down (always maximum resolution + 4x MSAA even during motion)
+    // - BatterySaver mode: ALWAYS scale down during motion to save power and shared RAM bandwidth
+    // - Auto mode: on Discrete GPUs (NVIDIA/AMD) or fast iGPUs (frame time <= 8ms), NEVER scale down!
+    //              Only scale down during motion if running on low-end iGPU/software rasterizer with high frame times.
+    bool scaleMotionTarget = false;
+    if (inMotion) {
+        if (qualityProfile_ == QualityProfile::BatterySaver) {
+            scaleMotionTarget = true;
+        } else if (qualityProfile_ == QualityProfile::Ultra) {
+            scaleMotionTarget = false;
+        } else { // Auto
+            const bool isDiscrete = (adapterType_ == WGPUAdapterType_DiscreteGPU);
+            if (isDiscrete) {
+                scaleMotionTarget = false;
+            } else {
+                scaleMotionTarget = (lastFrameDurationMs_ > 8.0f);
+            }
+        }
+    }
+
+    const bool useMsaa = isOffscreen_ && (!scaleMotionTarget) &&
         msaaColorTextureView_ != nullptr && depthTextureViewMsaa_ != nullptr &&
         hintPipelineMsaa_ != nullptr && foundPipelineMsaa_ != nullptr && stickerPipelineMsaa_ != nullptr;
 
@@ -814,7 +851,7 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     uint32_t    activeBytesPerRow  = bytesPerRow_;
 
     if (isOffscreen_) {
-        if (inMotion && motionTargetTexture_) {
+        if (scaleMotionTarget && motionTargetTexture_) {
             activeOffscreenTex       = motionTargetTexture_;
             activeWidth              = motionWidth_;
             activeHeight             = motionHeight_;
@@ -899,7 +936,7 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device_, &ced);
 
     WGPURenderPassColorAttachment ca = {};
-    if (useMsaaResting) {
+    if (useMsaa) {
         // 4x MSAA hardware resolve into backbuffer; discard 4x samples in GPU tile/L3 cache
         ca.view          = msaaColorTextureView_;
         ca.resolveTarget = backbuffer;
@@ -914,9 +951,9 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     ca.clearValue = {bgR_, bgG_, bgB_, bgA_};
 
     WGPURenderPassDepthStencilAttachment da = {};
-    da.view              = useMsaaResting ? depthTextureViewMsaa_ : depthTextureView_;
+    da.view              = useMsaa ? depthTextureViewMsaa_ : depthTextureView_;
     da.depthLoadOp       = WGPULoadOp_Clear;
-    da.depthStoreOp      = useMsaaResting ? WGPUStoreOp_Discard : WGPUStoreOp_Store;
+    da.depthStoreOp      = useMsaa ? WGPUStoreOp_Discard : WGPUStoreOp_Store;
     da.depthClearValue   = 1.0f;
     da.stencilLoadOp     = WGPULoadOp_Undefined;
     da.stencilStoreOp    = WGPUStoreOp_Undefined;
@@ -930,9 +967,9 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertexBuffer_,
         0, vertices_.size() * sizeof(Vertex));
 
-    WGPURenderPipeline activeHintPipe    = useMsaaResting ? hintPipelineMsaa_    : hintPipeline_;
-    WGPURenderPipeline activeFoundPipe   = useMsaaResting ? foundPipelineMsaa_   : foundPipeline_;
-    WGPURenderPipeline activeStickerPipe = useMsaaResting ? stickerPipelineMsaa_ : stickerPipeline_;
+    WGPURenderPipeline activeHintPipe    = useMsaa ? hintPipelineMsaa_    : hintPipeline_;
+    WGPURenderPipeline activeFoundPipe   = useMsaa ? foundPipelineMsaa_   : foundPipeline_;
+    WGPURenderPipeline activeStickerPipe = useMsaa ? stickerPipelineMsaa_ : stickerPipeline_;
 
     // ── Pass 1: Hints (only if showHint_ is true) ───────────────────────────
     if (showHint_) {
@@ -1024,6 +1061,9 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
                     wgpuBufferUnmap(readbackBuffer_);
                     lastRenderedWidth_  = activeWidth;
                     lastRenderedHeight_ = activeHeight;
+
+                    auto frameEndTime = std::chrono::steady_clock::now();
+                    lastFrameDurationMs_ = std::chrono::duration<float, std::milli>(frameEndTime - frameStartTime).count();
                     return true;
                 }
                 wgpuBufferUnmap(readbackBuffer_);
@@ -1215,6 +1255,11 @@ void WebGpuRenderer::setBodyAlpha(float alpha) {
     CubeGeometry::setBodyAlpha(alpha);
     CubeGeometry::build(vertices_, cubies_);
     if (initialized_) uploadVertexBuffer();
+    dirty_ = true;
+}
+
+void WebGpuRenderer::setQualityProfile(QualityProfile profile) {
+    qualityProfile_ = profile;
     dirty_ = true;
 }
 

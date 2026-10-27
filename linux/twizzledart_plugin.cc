@@ -362,6 +362,16 @@ static void HandleViewMethodCall(
         }
       }
       response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    } else if (strcmp(method, "setQualityProfile") == 0) {
+      if (r && args) {
+        std::string mode = GetFlString(args, "profile", "auto");
+        auto p = twizzle::renderer::QualityProfile::Auto;
+        if (mode == "ultra") p = twizzle::renderer::QualityProfile::Ultra;
+        else if (mode == "batterySaver") p = twizzle::renderer::QualityProfile::BatterySaver;
+        r->setQualityProfile(p);
+        shouldWake = true;
+      }
+      response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
     } else {
       response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
     }
@@ -407,6 +417,7 @@ static void HandleMainMethodCall(
     uint32_t height = (uint32_t)GetFlDouble(args, "height", 512);
 
     std::string initialAlgorithm = GetFlString(args, "initialAlgorithm");
+    std::string qualityProfile   = GetFlString(args, "qualityProfile", "auto");
     double speed                 = GetFlDouble(args, "speed",       1.0);
     bool   pitchLock             = GetFlBool  (args, "pitchLock",   true);
     double bodyAlpha             = GetFlDouble(args, "bodyAlpha",   1.0);
@@ -474,6 +485,13 @@ static void HandleMainMethodCall(
       renderer->setPitchLock(pitchLock);
       renderer->setCameraPosition((float)camLat, (float)camLon, (float)camRad);
       renderer->setBodyAlpha((float)bodyAlpha);
+      if (qualityProfile == "ultra") {
+        renderer->setQualityProfile(twizzle::renderer::QualityProfile::Ultra);
+      } else if (qualityProfile == "batterySaver") {
+        renderer->setQualityProfile(twizzle::renderer::QualityProfile::BatterySaver);
+      } else {
+        renderer->setQualityProfile(twizzle::renderer::QualityProfile::Auto);
+      }
       if (hasFaceColors) renderer->setFaceColors(faceColors);
       if (!initialAlgorithm.empty()) renderer->applyAlgorithm(initialAlgorithm);
     }
