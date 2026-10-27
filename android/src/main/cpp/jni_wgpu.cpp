@@ -203,6 +203,13 @@ Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeIsAnimatin
     return (inst && inst->renderer.isAnimating()) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeNeedsRender(
+        JNIEnv*, jobject, jlong handle) {
+    auto* inst = toInstance(handle);
+    return (inst && inst->renderer.needsRender()) ? JNI_TRUE : JNI_FALSE;
+}
+
 // ---------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------

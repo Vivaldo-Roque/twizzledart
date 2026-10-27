@@ -4,8 +4,9 @@
 ///
 /// This is the platform-agnostic interface of the WebGPU cube renderer.
 /// It owns the wgpu device/queue/pipeline, the orbit camera, and the move
-/// timeline (MoveAnimator). Platform glue code (Windows, Android, iOS, macOS)
-/// creates a WGPUSurface, calls init(), and calls render() once per frame.
+/// timeline (MoveAnimator). Platform glue code (Windows, Android, iOS, macOS, Linux)
+/// creates a WGPUSurface, calls init(), and calls render() once per frame when
+/// needsRender() is true.
 ///
 /// Backends selected automatically by wgpu-native:
 ///   Android / Linux → Vulkan
@@ -105,6 +106,11 @@ public:
     bool  isPlaying()   const;
     bool  isAnimating() const;
 
+    /// Returns true if the scene has pending state changes, active drag,
+    /// camera inertia, or an active move animation.
+    bool  needsRender() const;
+    void  markDirty() { dirty_ = true; }
+
     // ── Visual properties ─────────────────────────────────────────────────
     void  setSpeed          (float speed);
     float getSpeed          () const;
@@ -131,9 +137,12 @@ private:
     WGPUBuffer vertexBuffer_  = nullptr;
     WGPUBuffer uniformBuffer_ = nullptr;
 
-    // Bind group / layout
-    WGPUBindGroupLayout bindGroupLayout_ = nullptr;
-    WGPUBindGroup       bindGroup_       = nullptr;
+    // Bind group / layout (cached across frames to eliminate per-frame allocations)
+    WGPUBindGroupLayout        frameBindGroupLayout_ = nullptr;
+    WGPUBindGroupLayout        cubieBindGroupLayout_ = nullptr;
+    WGPUBindGroup              frameBindGroup_       = nullptr;
+    std::vector<WGPUBindGroup> cubieBindGroups_;
+    std::vector<uint8_t>       uniformStagingBuffer_;
 
     // Depth-stencil texture
     WGPUTexture     depthTexture_     = nullptr;
@@ -148,6 +157,7 @@ private:
 
     // ── Frame state ───────────────────────────────────────────────────────────
     bool     initialized_ = false;
+    bool     dirty_       = true;
     uint32_t width_  = 1, height_ = 1;
     WGPUTextureFormat surfaceFormat_ = WGPUTextureFormat_BGRA8Unorm; ///< detected at runtime
     // Background clear color (linear RGB, default off-white ~#F4F4F7)

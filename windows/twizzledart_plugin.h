@@ -18,6 +18,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>
 #include <functional>
 
 // Forward declarations (avoid heavy wgpu include in the header)
@@ -40,10 +41,11 @@ struct CubeViewInstance {
     // WebGPU renderer (renders to offscreen surface, then readback to pixelBuffer)
     std::unique_ptr<twizzle::renderer::WebGpuRenderer> renderer;
 
-    // Render loop state
-    std::thread   renderThread;
-    std::atomic<bool> running{false};
-    std::mutex    rendererMutex;
+    // Render loop state (on-demand via wakeCv)
+    std::thread             renderThread;
+    std::atomic<bool>       running{false};
+    std::mutex              rendererMutex;
+    std::condition_variable wakeCv;
 
     // Method channel for this specific view (twizzledart_view_<id>)
     std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> viewChannel;

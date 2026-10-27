@@ -3,8 +3,8 @@
 ///
 /// Initialises a wgpu-native device against the platform surface, compiles the
 /// WGSL shader, builds the vertex + uniform pipeline, and renders one frame per
-/// call to render(). The platform plugin (Windows / Android / iOS) creates the
-/// WGPUSurface descriptor and calls init() once; from that point this class is
+/// call to render(). The platform plugin (Windows / Android / iOS / Linux) creates
+/// the WGPUSurface descriptor and calls init() once; from that point this class is
 /// entirely platform-agnostic.
 #include "renderer/WebGpuRenderer.hpp"
 #include "twizzle/algorithm.hpp"
@@ -46,8 +46,6 @@ static bool isEmulatorDevice() {
 #endif
 
 // Embed the WGSL shader source as a C string literal.
-// In a real build this would be loaded from the file system or embedded via
-// CMake's configure_file / xxd; for now we embed it directly.
 static const char* kWgslShader = R"WGSL(
 struct FrameUniforms {
     vp : mat4x4<f32>,
@@ -109,7 +107,9 @@ static WGPUAdapter requestAdapterSync(WGPUInstance instance,
 #if !defined(__ANDROID__)
     opts.compatibleSurface = surface;
 #endif
-    opts.powerPreference   = WGPUPowerPreference_HighPerformance;
+    // Prefer low-power (integrated GPU / efficiency core) to save battery
+    // on dual-GPU laptops and mobile devices.
+    opts.powerPreference   = WGPUPowerPreference_LowPower;
 
     wgpuInstanceRequestAdapter(instance, &opts,
         [](WGPURequestAdapterStatus status, WGPUAdapter adapter, const char* msg, void* ud) {
@@ -233,16 +233,17 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
     CubeGeometry::build(vertices_, cubies_);
     uploadVertexBuffer();
 
-    // 8. Uniform buffer + bind group layout
+    // 8. Uniform buffer + staging buffer
     createUniformBuffer();
 
-    // 9. Render pipeline
+    // 9. Render pipeline + persistent bind groups
     if (!createPipeline()) return false;
 
     // 10. Animator
     animator_ = std::make_unique<MoveAnimator>(cubies_);
 
     initialized_ = true;
+    dirty_       = true;
     return true;
 }
 
@@ -273,7 +274,6 @@ bool WebGpuRenderer::createSurface(const SurfaceDescriptor& d) {
     sd.nextInChain = reinterpret_cast<const WGPUChainedStruct*>(&hw);
 
 #else
-    // Linux — assume Xlib (could also support Wayland)
     (void)d;
     std::fprintf(stderr, "[Twizzle] createSurface: unsupported platform\n");
     return false;
@@ -295,11 +295,8 @@ void WebGpuRenderer::configureSurface() {
     WGPUSurfaceCapabilities caps = {};
     wgpuSurfaceGetCapabilities(surface_, adapter_, &caps);
 
-    // Use a linear (non-sRGB) format to match OpenGL's default behavior.
-    // Modern APIs often default to sRGB, which causes "double gamma correction"
-    // when passing Flutter's already-sRGB colors.
     if (caps.formatCount > 0) {
-        fmt = caps.formats[0]; // fallback to preferred
+        fmt = caps.formats[0];
         for (uint32_t i = 0; i < caps.formatCount; ++i) {
             if (caps.formats[i] == WGPUTextureFormat_BGRA8Unorm || 
                 caps.formats[i] == WGPUTextureFormat_RGBA8Unorm) {
@@ -308,14 +305,9 @@ void WebGpuRenderer::configureSurface() {
             }
         }
     }
-    // TODO: Free caps if wgpu-native exposes wgpuSurfaceCapabilitiesFreeMembers
 #else
-    // On Android (wgpu-native GLES fallback), probing capabilities connects
-    // EGL to the surface and causes `already connected` on wgpuSurfaceConfigure.
-    // BGRA8Unorm or RGBA8Unorm is universally supported on Android.
     fmt = WGPUTextureFormat_RGBA8Unorm;
 #endif
-
 
     WGPUSurfaceConfiguration cfg = {};
     cfg.device      = device_;
@@ -324,7 +316,7 @@ void WebGpuRenderer::configureSurface() {
     cfg.width       = width_;
     cfg.height      = height_;
     cfg.presentMode = WGPUPresentMode_Fifo; // VSync
-    cfg.alphaMode   = WGPUCompositeAlphaMode_Auto; // Reverted to avoid Android crash
+    cfg.alphaMode   = WGPUCompositeAlphaMode_Auto;
     wgpuSurfaceConfigure(surface_, &cfg);
 
 #if defined(__ANDROID__)
@@ -432,13 +424,14 @@ void WebGpuRenderer::createUniformBuffer() {
     // Per-cubie uniforms (binding 0, group 1) — model matrix + bodyAlpha.
     constexpr uint64_t kCubieSize = sizeof(float) * (16 + 4); // mat4 + vec4
 
-    // We allocate one combined buffer and offset into it.
     // Align cubie block to 256 bytes (minUniformBufferOffsetAlignment).
     constexpr uint64_t kAlign = 256;
     constexpr uint64_t kFrameAligned = ((kFrameSize + kAlign - 1) / kAlign) * kAlign;
     constexpr uint64_t kCubieAligned = ((kCubieSize + kAlign - 1) / kAlign) * kAlign;
     // 1 frame block + 26 cubie blocks
     uint64_t totalSize = kFrameAligned + 26 * kCubieAligned;
+
+    uniformStagingBuffer_.assign((size_t)totalSize, 0);
 
     if (uniformBuffer_) wgpuBufferRelease(uniformBuffer_);
 
@@ -449,7 +442,9 @@ void WebGpuRenderer::createUniformBuffer() {
     bd.mappedAtCreation = false;
     uniformBuffer_ = wgpuDeviceCreateBuffer(device_, &bd);
 
-    rebuildBindGroup();
+    if (frameBindGroupLayout_ && cubieBindGroupLayout_) {
+        rebuildBindGroup();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -496,8 +491,7 @@ bool WebGpuRenderer::createPipeline() {
     blendComp.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
     blendComp.operation = WGPUBlendOperation_Add;
 
-    // For Alpha, we want to PRESERVE the destination alpha (which is 1.0 from clear)
-    // so the OS doesn't blend the surface with the Flutter UI underneath.
+    // For Alpha, preserve destination alpha (1.0 from clear)
     WGPUBlendComponent alphaBlend = {};
     alphaBlend.srcFactor = WGPUBlendFactor_Zero;
     alphaBlend.dstFactor = WGPUBlendFactor_One;
@@ -507,8 +501,6 @@ bool WebGpuRenderer::createPipeline() {
     blendState.color = blendComp;
     blendState.alpha = alphaBlend;
 
-    // Use the format detected at configureSurface() time — avoids mismatch
-    // when the platform returns RGBA8Unorm (19) instead of BGRA8Unorm (23).
     WGPUTextureFormat swapFmt = surfaceFormat_;
 
     WGPUColorTargetState cts = {};
@@ -522,18 +514,6 @@ bool WebGpuRenderer::createPipeline() {
     fs.targetCount = 1;
     fs.targets     = &cts;
 
-    WGPUDepthStencilState dss = {};
-    dss.format            = WGPUTextureFormat_Depth24Plus;
-    dss.depthWriteEnabled = true;
-    dss.depthCompare      = WGPUCompareFunction_Less;
-    dss.stencilFront.compare     = WGPUCompareFunction_Always;
-    dss.stencilFront.failOp      = WGPUStencilOperation_Keep;
-    dss.stencilFront.depthFailOp = WGPUStencilOperation_Keep;
-    dss.stencilFront.passOp      = WGPUStencilOperation_Keep;
-    dss.stencilBack              = dss.stencilFront;
-    dss.stencilReadMask   = 0xFFFFFFFF;
-    dss.stencilWriteMask  = 0xFFFFFFFF;
-
     // Pipeline layout (bind group layouts)
     // Group 0: frame uniforms; Group 1: per-cubie uniforms
     WGPUBindGroupLayoutEntry bgle0 = {};
@@ -545,16 +525,17 @@ bool WebGpuRenderer::createPipeline() {
     WGPUBindGroupLayoutDescriptor bgld0 = {};
     bgld0.entryCount = 1;
     bgld0.entries    = &bgle0;
-    WGPUBindGroupLayout bgl0 = wgpuDeviceCreateBindGroupLayout(device_, &bgld0);
+    if (frameBindGroupLayout_) wgpuBindGroupLayoutRelease(frameBindGroupLayout_);
+    frameBindGroupLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &bgld0);
 
-    WGPUBindGroupLayoutEntry bgle1 = bgle0; // same shape for per-cubie
+    WGPUBindGroupLayoutEntry bgle1 = bgle0;
     WGPUBindGroupLayoutDescriptor bgld1 = {};
     bgld1.entryCount = 1;
     bgld1.entries    = &bgle1;
-    WGPUBindGroupLayout bgl1 = wgpuDeviceCreateBindGroupLayout(device_, &bgld1);
-    bindGroupLayout_ = bgl1;
+    if (cubieBindGroupLayout_) wgpuBindGroupLayoutRelease(cubieBindGroupLayout_);
+    cubieBindGroupLayout_ = wgpuDeviceCreateBindGroupLayout(device_, &bgld1);
 
-    WGPUBindGroupLayout bgls[2] = {bgl0, bgl1};
+    WGPUBindGroupLayout bgls[2] = {frameBindGroupLayout_, cubieBindGroupLayout_};
     WGPUPipelineLayoutDescriptor pld = {};
     pld.bindGroupLayoutCount = 2;
     pld.bindGroupLayouts     = bgls;
@@ -619,22 +600,64 @@ bool WebGpuRenderer::createPipeline() {
     stickerPipeline_ = wgpuDeviceCreateRenderPipeline(device_, &rpd);
 
     wgpuPipelineLayoutRelease(pipelineLayout);
-    wgpuBindGroupLayoutRelease(bgl0);
     wgpuShaderModuleRelease(shader);
+
+    rebuildBindGroup();
 
     return (hintPipeline_ != nullptr && foundPipeline_ != nullptr && stickerPipeline_ != nullptr);
 }
 
 // ---------------------------------------------------------------------------
-// rebuildBindGroup — re-creates bind group 1 (per-cubie) after buffer change.
-// Bind group 0 (frame) is re-created inline in render() since it uses dynamic
-// offsets; here we allocate the layout reference only.
+// rebuildBindGroup — pre-creates persistent bind groups for frame + 26 cubies
+// so renderInternal() performs zero bind group allocations per frame.
 // ---------------------------------------------------------------------------
 
 void WebGpuRenderer::rebuildBindGroup() {
-    // Bind groups are rebuilt per-frame in render() using dynamic offsets;
-    // nothing to do at this point beyond ensuring layout_ is valid.
-    (void)bindGroup_;
+    if (!device_ || !uniformBuffer_ || !frameBindGroupLayout_ || !cubieBindGroupLayout_) return;
+
+    if (frameBindGroup_) {
+        wgpuBindGroupRelease(frameBindGroup_);
+        frameBindGroup_ = nullptr;
+    }
+    for (auto bg : cubieBindGroups_) {
+        if (bg) wgpuBindGroupRelease(bg);
+    }
+    cubieBindGroups_.clear();
+
+    constexpr uint64_t kAlign        = 256;
+    constexpr uint64_t kFrameSize    = sizeof(float) * 20;
+    constexpr uint64_t kFrameAligned = ((kFrameSize + kAlign - 1) / kAlign) * kAlign;
+    constexpr uint64_t kCubieSize    = sizeof(float) * 20;
+    constexpr uint64_t kCubieAligned = ((kCubieSize + kAlign - 1) / kAlign) * kAlign;
+
+    WGPUBindGroupEntry bge0 = {};
+    bge0.binding = 0;
+    bge0.buffer  = uniformBuffer_;
+    bge0.offset  = 0;
+    bge0.size    = kFrameSize;
+
+    WGPUBindGroupDescriptor bgd0 = {};
+    bgd0.layout     = frameBindGroupLayout_;
+    bgd0.entryCount = 1;
+    bgd0.entries    = &bge0;
+    frameBindGroup_ = wgpuDeviceCreateBindGroup(device_, &bgd0);
+
+    cubieBindGroups_.resize(cubies_.size(), nullptr);
+    for (size_t i = 0; i < cubies_.size(); ++i) {
+        uint64_t cubieOffset = kFrameAligned + (uint64_t)i * kCubieAligned;
+
+        WGPUBindGroupEntry bge1 = {};
+        bge1.binding = 0;
+        bge1.buffer  = uniformBuffer_;
+        bge1.offset  = cubieOffset;
+        bge1.size    = kCubieSize;
+
+        WGPUBindGroupDescriptor bgd1 = {};
+        bgd1.layout     = cubieBindGroupLayout_;
+        bgd1.entryCount = 1;
+        bgd1.entries    = &bge1;
+        cubieBindGroups_[i] = wgpuDeviceCreateBindGroup(device_, &bgd1);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -648,10 +671,10 @@ void WebGpuRenderer::resize(uint32_t width, uint32_t height) {
     
     width_  = width;
     height_ = height;
+    dirty_  = true;
     camera_.setViewport((int)width_, (int)height_);
     if (!initialized_) return;
     
-    // Attempt to configure the surface or offscreen target.
     if (isOffscreen_) {
         createOffscreenTarget();
     } else {
@@ -675,30 +698,18 @@ bool WebGpuRenderer::renderToBuffer(float dt, uint8_t* destBuffer) {
 bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     if (!initialized_) return false;
 
+    dirty_ = false;
+
     float now = nowSeconds();
     camera_.update(dt, now);
     animator_->update(dt);
-
-#ifdef __ANDROID__
-    static int s_logFrame = 0;
-    if (debugLogs_ && ++s_logFrame % 60 == 1) {
-        glm::vec3 p = camera_.position();
-        int f0 = cubies_.empty() ? -1 : cubies_[0].foundCount;
-        int s0 = cubies_.empty() ? -1 : cubies_[0].stickerCount;
-        __android_log_print(ANDROID_LOG_INFO, "TwizzleDEBUG",
-            "render: w=%u h=%u bg=(%.2f,%.2f,%.2f,%.2f) camPos=(%.2f,%.2f,%.2f) lat=%.1f lon=%.1f rad=%.1f verts=%zu cubies=%zu foundAlpha=%.2f cubie0[found=%d stick=%d]",
-            width_, height_, bgR_, bgG_, bgB_, bgA_, p.x, p.y, p.z,
-            camera_.latitude(), camera_.longitude(), camera_.radius(),
-            vertices_.size(), cubies_.size(), CubeGeometry::kFoundAlpha, f0, s0);
-    }
-#endif
 
     // ── Acquire backbuffer texture view ─────────────────────────────────
     WGPUSurfaceTexture st = {};
     WGPUTextureView backbuffer = nullptr;
 
     if (isOffscreen_) {
-        if (!renderTargetTexture_) return false;
+        if (!renderTargetTexture_) { dirty_ = true; return false; }
         backbuffer = wgpuTextureCreateView(renderTargetTexture_, nullptr);
     } else {
         wgpuSurfaceGetCurrentTexture(surface_, &st);
@@ -707,14 +718,15 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
                 st.status == WGPUSurfaceGetCurrentTextureStatus_Lost) {
                 configureSurface();
             }
+            dirty_ = true;
             return false;
         }
         backbuffer = wgpuTextureCreateView(st.texture, nullptr);
     }
 
-    if (!backbuffer) return false;
+    if (!backbuffer) { dirty_ = true; return false; }
 
-    // ── Build VP uniform data ───────────────────────────────────────────
+    // ── Build VP + Cubie uniform data in a single staging buffer ────────
     glm::mat4 vp = camera_.projection() * camera_.view();
     struct FrameBlock {
         float vp[16];
@@ -729,8 +741,12 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     constexpr uint64_t kCubieSize    = sizeof(float) * 20; // mat4 + vec4 (pad)
     constexpr uint64_t kCubieAligned = ((kCubieSize + kAlign - 1) / kAlign) * kAlign;
 
-    wgpuQueueWriteBuffer(queue_, uniformBuffer_, 0, &fb, kFrameSize);
+    uint64_t requiredSize = kFrameAligned + cubies_.size() * kCubieAligned;
+    if (uniformStagingBuffer_.size() < requiredSize) {
+        uniformStagingBuffer_.resize((size_t)requiredSize, 0);
+    }
 
+    std::memcpy(uniformStagingBuffer_.data(), &fb, kFrameSize);
 
     for (int i = 0; i < (int)cubies_.size(); ++i) {
         glm::mat4 model = animator_->modelMatrix(i);
@@ -743,8 +759,12 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
         cb.params[1] = cb.params[2] = cb.params[3] = 0.0f;
 
         uint64_t offset = kFrameAligned + (uint64_t)i * kCubieAligned;
-        wgpuQueueWriteBuffer(queue_, uniformBuffer_, offset, &cb, kCubieSize);
+        std::memcpy(uniformStagingBuffer_.data() + offset, &cb, kCubieSize);
     }
+
+    // Single consolidated buffer upload per frame instead of 27 calls
+    wgpuQueueWriteBuffer(queue_, uniformBuffer_, 0,
+                         uniformStagingBuffer_.data(), requiredSize);
 
     // ── Command encoder ─────────────────────────────────────────────────
     WGPUCommandEncoderDescriptor ced = {}; ced.label = "frame";
@@ -773,48 +793,14 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertexBuffer_,
         0, vertices_.size() * sizeof(Vertex));
 
-    // Build frame bind group (group 0)
-    WGPUBindGroupEntry bge0 = {};
-    bge0.binding = 0;
-    bge0.buffer  = uniformBuffer_;
-    bge0.offset  = 0;
-    bge0.size    = kFrameSize;
-
-    WGPUBindGroupLayout frameLayout = wgpuRenderPipelineGetBindGroupLayout(stickerPipeline_, 0);
-    WGPUBindGroupDescriptor bgd0 = {};
-    bgd0.layout     = frameLayout;
-    bgd0.entryCount = 1;
-    bgd0.entries    = &bge0;
-    WGPUBindGroup frameGroup = wgpuDeviceCreateBindGroup(device_, &bgd0);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, frameGroup, 0, nullptr);
-
-    // Prepare per-cubie bind groups (group 1)
-    WGPUBindGroupLayout cubieLayout = wgpuRenderPipelineGetBindGroupLayout(stickerPipeline_, 1);
-    std::vector<WGPUBindGroup> cubieGroups(cubies_.size());
-    for (int i = 0; i < (int)cubies_.size(); ++i) {
-        uint64_t cubieOffset = kFrameAligned + (uint64_t)i * kCubieAligned;
-
-        WGPUBindGroupEntry bge1 = {};
-        bge1.binding = 0;
-        bge1.buffer  = uniformBuffer_;
-        bge1.offset  = cubieOffset;
-        bge1.size    = kCubieSize;
-
-        WGPUBindGroupDescriptor bgd1 = {};
-        bgd1.layout     = cubieLayout;
-        bgd1.entryCount = 1;
-        bgd1.entries    = &bge1;
-        cubieGroups[i] = wgpuDeviceCreateBindGroup(device_, &bgd1);
-    }
-
     // ── Pass 1: Hints (only if showHint_ is true) ───────────────────────────
     if (showHint_) {
         wgpuRenderPassEncoderSetPipeline(pass, hintPipeline_);
-        wgpuRenderPassEncoderSetBindGroup(pass, 0, frameGroup, 0, nullptr);
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, frameBindGroup_, 0, nullptr);
         for (size_t i = 0; i < cubies_.size(); ++i) {
             const CubieInfo& c = cubies_[i];
             if (c.hintCount == 0) continue;
-            wgpuRenderPassEncoderSetBindGroup(pass, 1, cubieGroups[i], 0, nullptr);
+            wgpuRenderPassEncoderSetBindGroup(pass, 1, cubieBindGroups_[i], 0, nullptr);
             wgpuRenderPassEncoderDraw(pass, (uint32_t)c.hintCount, 1,
                                       (uint32_t)c.hintOffset, 0);
         }
@@ -822,35 +808,28 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
 
     // ── Pass 2: Foundation (black cubie bodies) ─────────────────────────────
     wgpuRenderPassEncoderSetPipeline(pass, foundPipeline_);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, frameGroup, 0, nullptr);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, frameBindGroup_, 0, nullptr);
     for (size_t i = 0; i < cubies_.size(); ++i) {
         const CubieInfo& c = cubies_[i];
         if (c.foundCount == 0) continue;
-        wgpuRenderPassEncoderSetBindGroup(pass, 1, cubieGroups[i], 0, nullptr);
+        wgpuRenderPassEncoderSetBindGroup(pass, 1, cubieBindGroups_[i], 0, nullptr);
         wgpuRenderPassEncoderDraw(pass, (uint32_t)c.foundCount, 1,
                                       (uint32_t)c.foundOffset, 0);
     }
 
     // ── Pass 3: Stickers (opaque coloured quads) ────────────────────────────
     wgpuRenderPassEncoderSetPipeline(pass, stickerPipeline_);
-    wgpuRenderPassEncoderSetBindGroup(pass, 0, frameGroup, 0, nullptr);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, frameBindGroup_, 0, nullptr);
     for (size_t i = 0; i < cubies_.size(); ++i) {
         const CubieInfo& c = cubies_[i];
         if (c.stickerCount == 0) continue;
-        wgpuRenderPassEncoderSetBindGroup(pass, 1, cubieGroups[i], 0, nullptr);
+        wgpuRenderPassEncoderSetBindGroup(pass, 1, cubieBindGroups_[i], 0, nullptr);
         wgpuRenderPassEncoderDraw(pass, (uint32_t)c.stickerCount, 1,
                                   (uint32_t)c.stickerOffset, 0);
     }
 
-    for (auto bg : cubieGroups) {
-        wgpuBindGroupRelease(bg);
-    }
-
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
-    wgpuBindGroupRelease(frameGroup);
-    wgpuBindGroupLayoutRelease(frameLayout);
-    wgpuBindGroupLayoutRelease(cubieLayout);
 
     if (isOffscreen_) {
         WGPUImageCopyTexture src = {};
@@ -919,6 +898,13 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
 void WebGpuRenderer::destroy() {
     if (!initialized_) return;
     initialized_ = false;
+    if (frameBindGroup_) { wgpuBindGroupRelease(frameBindGroup_); frameBindGroup_ = nullptr; }
+    for (auto bg : cubieBindGroups_) {
+        if (bg) wgpuBindGroupRelease(bg);
+    }
+    cubieBindGroups_.clear();
+    if (frameBindGroupLayout_) { wgpuBindGroupLayoutRelease(frameBindGroupLayout_); frameBindGroupLayout_ = nullptr; }
+    if (cubieBindGroupLayout_) { wgpuBindGroupLayoutRelease(cubieBindGroupLayout_); cubieBindGroupLayout_ = nullptr; }
     if (renderTargetTexture_) { wgpuTextureRelease(renderTargetTexture_); renderTargetTexture_ = nullptr; }
     if (readbackBuffer_)      { wgpuBufferRelease(readbackBuffer_);      readbackBuffer_      = nullptr; }
     if (depthTextureView_) { wgpuTextureViewRelease(depthTextureView_); depthTextureView_ = nullptr; }
@@ -941,6 +927,7 @@ void WebGpuRenderer::destroy() {
 
 void WebGpuRenderer::onDragBegin(float x, float y) {
     dragging_ = true;
+    dirty_    = true;
     lastDragX_ = x;
     lastDragY_ = y;
     camera_.beginDrag(nowSeconds());
@@ -951,16 +938,25 @@ void WebGpuRenderer::onDragMove(float x, float y) {
         camera_.drag(x - lastDragX_, y - lastDragY_);
         lastDragX_ = x;
         lastDragY_ = y;
+        dirty_     = true;
     }
 }
 
 void WebGpuRenderer::onDragEnd() {
     dragging_ = false;
+    dirty_    = true;
     camera_.endDrag(nowSeconds());
 }
 
-void WebGpuRenderer::onDrag(float dx, float dy) { camera_.drag(dx, dy); }
-void WebGpuRenderer::onZoom(float delta)         { camera_.zoom(delta); }
+void WebGpuRenderer::onDrag(float dx, float dy) {
+    camera_.drag(dx, dy);
+    dirty_ = true;
+}
+
+void WebGpuRenderer::onZoom(float delta) {
+    camera_.zoom(delta);
+    dirty_ = true;
+}
 
 // ---------------------------------------------------------------------------
 // Move timeline
@@ -969,11 +965,13 @@ void WebGpuRenderer::onZoom(float delta)         { camera_.zoom(delta); }
 void WebGpuRenderer::applyMove(const twizzle::Move& move) {
     cube_.applyMove(move);
     animator_->queueMove(move);
+    dirty_ = true;
 }
 
 void WebGpuRenderer::applyAlgorithm(const std::string& algStr) {
     auto moves = twizzle::AlgorithmParser::parse(algStr);
     for (const auto& m : moves) applyMove(m);
+    dirty_ = true;
 }
 
 void WebGpuRenderer::reset() {
@@ -981,38 +979,51 @@ void WebGpuRenderer::reset() {
     animator_->clear();
     CubeGeometry::build(vertices_, cubies_);
     if (initialized_) uploadVertexBuffer();
+    dirty_ = true;
 }
 
 // ── Transport ────────────────────────────────────────────────────────────
-void  WebGpuRenderer::play()           { animator_->play(); }
-void  WebGpuRenderer::pause()          { animator_->pause(); }
-void  WebGpuRenderer::togglePlay()     { animator_->togglePlay(); }
-void  WebGpuRenderer::jumpToStart()    { animator_->jumpToStart(); }
-void  WebGpuRenderer::jumpToEnd()      { animator_->jumpToEnd(); }
-void  WebGpuRenderer::stepForward()    { animator_->stepForward(); }
-void  WebGpuRenderer::stepBackward()   { animator_->stepBackward(); }
+void  WebGpuRenderer::play()           { animator_->play();         dirty_ = true; }
+void  WebGpuRenderer::pause()          { animator_->pause();        dirty_ = true; }
+void  WebGpuRenderer::togglePlay()     { animator_->togglePlay();   dirty_ = true; }
+void  WebGpuRenderer::jumpToStart()    { animator_->jumpToStart();  dirty_ = true; }
+void  WebGpuRenderer::jumpToEnd()      { animator_->jumpToEnd();    dirty_ = true; }
+void  WebGpuRenderer::stepForward()    { animator_->stepForward();  dirty_ = true; }
+void  WebGpuRenderer::stepBackward()   { animator_->stepBackward(); dirty_ = true; }
 
 // ── Scrubbing ─────────────────────────────────────────────────────────────
-void  WebGpuRenderer::seekFraction(float f)  { animator_->seekFraction(f); }
-void  WebGpuRenderer::seekMs(float ms)        { animator_->seekMs(ms); }
+void  WebGpuRenderer::seekFraction(float f)  { animator_->seekFraction(f); dirty_ = true; }
+void  WebGpuRenderer::seekMs(float ms)       { animator_->seekMs(ms);      dirty_ = true; }
 float WebGpuRenderer::currentFraction() const { return animator_->currentFraction(); }
 float WebGpuRenderer::currentMs()       const { return animator_->currentMs(); }
 float WebGpuRenderer::totalDurationMs() const { return animator_->totalDurationMs(); }
 bool  WebGpuRenderer::isPlaying()       const { return animator_->isPlaying(); }
 bool  WebGpuRenderer::isAnimating()     const { return animator_->isAnimating(); }
 
+bool  WebGpuRenderer::needsRender() const {
+    if (!initialized_) return false;
+    return dirty_ || dragging_ || camera_.isInertiaActive() || (animator_ && animator_->isPlaying());
+}
+
 // ── Visual ────────────────────────────────────────────────────────────────
-void WebGpuRenderer::setSpeed(float s)                         { animator_->setSpeed(s); }
+void WebGpuRenderer::setSpeed(float s)                         { animator_->setSpeed(s); dirty_ = true; }
 float WebGpuRenderer::getSpeed() const                         { return animator_->getSpeed(); }
 void WebGpuRenderer::setBackgroundColor(float r, float g, float b, float a) {
     bgR_ = r; bgG_ = g; bgB_ = b; bgA_ = a;
+    dirty_ = true;
 }
-void WebGpuRenderer::setCameraPosition(float lat, float lon, float radius)
-    { camera_.setPosition(lat, lon, radius); }
-void WebGpuRenderer::setPitchLock(bool locked)
-    { camera_.setPitchLock(locked); }
-void WebGpuRenderer::setShowHint(bool show)
-    { showHint_ = show; }
+void WebGpuRenderer::setCameraPosition(float lat, float lon, float radius) {
+    camera_.setPosition(lat, lon, radius);
+    dirty_ = true;
+}
+void WebGpuRenderer::setPitchLock(bool locked) {
+    camera_.setPitchLock(locked);
+    dirty_ = true;
+}
+void WebGpuRenderer::setShowHint(bool show) {
+    showHint_ = show;
+    dirty_ = true;
+}
 void WebGpuRenderer::setDebugLogs(bool enabled) {
     debugLogs_ = enabled;
 #if defined(__ANDROID__)
@@ -1026,12 +1037,14 @@ void WebGpuRenderer::setFaceColors(const float colors[6][3]) {
     CubeGeometry::setFaceColors(c);
     CubeGeometry::build(vertices_, cubies_);
     if (initialized_) uploadVertexBuffer();
+    dirty_ = true;
 }
 
 void WebGpuRenderer::setBodyAlpha(float alpha) {
     CubeGeometry::setBodyAlpha(alpha);
     CubeGeometry::build(vertices_, cubies_);
     if (initialized_) uploadVertexBuffer();
+    dirty_ = true;
 }
 
 float WebGpuRenderer::nowSeconds() { return nowSec(); }

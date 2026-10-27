@@ -18,6 +18,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)reset;
 - (BOOL)isPlaying;
 - (BOOL)isAnimating;
+- (BOOL)needsRender;
 - (void)play;
 - (void)pause;
 - (void)stepForward;

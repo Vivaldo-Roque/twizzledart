@@ -47,7 +47,6 @@ class MetalView: UIView {
     
     override func layoutSubviews() {
         super.layoutSubviews()
-        // multiply by scale for high-DPI (Retina)
         let scale = UIScreen.main.nativeScale
         metalLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         onResize?(bounds.width * scale, bounds.height * scale)
@@ -75,12 +74,12 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
         _view.isOpaque = false
         _view.backgroundColor = .clear
         
-        channel = FlutterMethodChannel(name: "twizzle_view_\(viewId)", binaryMessenger: messenger)
+        channel = FlutterMethodChannel(name: "twizzledart_view_\(viewId)", binaryMessenger: messenger)
         super.init()
         
         let scale = UIScreen.main.nativeScale
-        let w = frame.size.width * scale
-        let h = frame.size.height * scale
+        let w = max(frame.size.width * scale, 1)
+        let h = max(frame.size.height * scale, 1)
         _view.metalLayer.drawableSize = CGSize(width: w, height: h)
         _view.metalLayer.isOpaque = false
         
@@ -88,10 +87,17 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
         
         _view.onResize = { [weak self] width, height in
             self?.renderer?.resize(withWidth: width, height: height)
+            self?.wakeRenderLoop()
         }
         
         if let params = args as? [String: Any] {
-            if let bg = params["backgroundColor"] as? [NSNumber], bg.count >= 4 {
+            if let bg = params["backgroundColor"] as? [String: NSNumber] {
+                let r = bg["r"]?.floatValue ?? 0.96
+                let g = bg["g"]?.floatValue ?? 0.96
+                let b = bg["b"]?.floatValue ?? 0.97
+                let a = bg["a"]?.floatValue ?? 1.0
+                renderer?.setBackgroundColorR(r, g: g, b: b, a: a)
+            } else if let bg = params["backgroundColor"] as? [NSNumber], bg.count >= 4 {
                 renderer?.setBackgroundColorR(bg[0].floatValue, g: bg[1].floatValue, b: bg[2].floatValue, a: bg[3].floatValue)
             }
             if let lock = params["pitchLock"] as? Bool { renderer?.setPitchLock(lock) }
@@ -115,11 +121,21 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
         
         lastTime = CACurrentMediaTime()
         displayLink = CADisplayLink(target: self, selector: #selector(renderFrame))
+        if #available(iOS 15.0, *) {
+            displayLink?.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        }
         displayLink?.add(to: .current, forMode: .common)
         
         channel.setMethodCallHandler({ [weak self] (call, result) in
             self?.handle(call, result: result)
         })
+    }
+    
+    private func wakeRenderLoop() {
+        if displayLink?.isPaused == true {
+            lastTime = CACurrentMediaTime()
+            displayLink?.isPaused = false
+        }
     }
     
     func setupGestures() {
@@ -145,8 +161,6 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
     @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
         if !touchEnabled { return }
         
-        let scaleFactor: CGFloat = UIScreen.main.nativeScale
-        
         if gesture.state == .began {
             wasScaling = true
             scaleLastSpan = gesture.scale
@@ -154,8 +168,7 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
             let delta = Float(gesture.scale - scaleLastSpan) * 10.0
             renderer?.onZoom(delta)
             scaleLastSpan = gesture.scale
-        } else if gesture.state == .ended || gesture.state == .cancelled {
-            // we will reset drag in Pan handler if it resumes
+            wakeRenderLoop()
         }
     }
     
@@ -174,6 +187,7 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
         if gesture.state == .began {
             wasScaling = false
             renderer?.onDragBeginX(x, y: y)
+            wakeRenderLoop()
         } else if gesture.state == .changed {
             if wasScaling {
                 wasScaling = false
@@ -181,21 +195,29 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
             } else {
                 renderer?.onDragMoveX(x, y: y)
             }
+            wakeRenderLoop()
         } else if gesture.state == .ended || gesture.state == .cancelled {
             renderer?.onDragEndX()
+            wakeRenderLoop()
         }
     }
     
-    // Allow simultaneous gestures (pan + pinch)
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         return true
     }
     
     @objc func renderFrame() {
+        guard let renderer = renderer else {
+            displayLink?.isPaused = true
+            return
+        }
         let now = CACurrentMediaTime()
-        let dt = Float(now - lastTime)
+        let dt = min(Float(now - lastTime), 0.05)
         lastTime = now
-        renderer?.render(dt)
+        renderer.render(dt)
+        if !renderer.needsRender() {
+            displayLink?.isPaused = true
+        }
     }
     
     func view() -> UIView {
@@ -205,43 +227,90 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
     func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
         case "applyAlgorithm":
-            if let args = call.arguments as? [String: Any], let alg = args["alg"] as? String {
+            if let args = call.arguments as? [String: Any],
+               let alg = (args["algorithm"] as? String) ?? (args["alg"] as? String) {
                 renderer?.applyAlgorithm(alg)
+                wakeRenderLoop()
             }
             result(nil)
         case "reset":
             renderer?.reset()
+            wakeRenderLoop()
             result(nil)
         case "play":
             renderer?.play()
+            wakeRenderLoop()
             result(nil)
         case "pause":
             renderer?.pause()
+            wakeRenderLoop()
             result(nil)
         case "stepForward":
             renderer?.stepForward()
+            wakeRenderLoop()
             result(nil)
         case "stepBackward":
             renderer?.stepBackward()
+            wakeRenderLoop()
             result(nil)
         case "seekFraction":
             if let args = call.arguments as? [String: Any], let f = args["fraction"] as? NSNumber {
                 renderer?.seekFraction(f.floatValue)
+                wakeRenderLoop()
             }
             result(nil)
         case "setSpeed":
             if let args = call.arguments as? [String: Any], let s = args["speed"] as? NSNumber {
                 renderer?.setSpeed(s.floatValue)
+                wakeRenderLoop()
+            }
+            result(nil)
+        case "setBackgroundColor":
+            if let args = call.arguments as? [String: Any] {
+                let r = (args["r"] as? NSNumber)?.floatValue ?? 0.08
+                let g = (args["g"] as? NSNumber)?.floatValue ?? 0.08
+                let b = (args["b"] as? NSNumber)?.floatValue ?? 0.10
+                let a = (args["a"] as? NSNumber)?.floatValue ?? 1.0
+                renderer?.setBackgroundColorR(r, g: g, b: b, a: a)
+                wakeRenderLoop()
+            }
+            result(nil)
+        case "setCameraPosition":
+            if let args = call.arguments as? [String: Any] {
+                let lat = (args["latitude"] as? NSNumber)?.floatValue ?? 35.0
+                let lon = (args["longitude"] as? NSNumber)?.floatValue ?? 30.0
+                let rad = (args["radius"] as? NSNumber)?.floatValue ?? 6.0
+                renderer?.setCameraPositionLat(lat, lon: lon, rad: rad)
+                wakeRenderLoop()
+            }
+            result(nil)
+        case "setTouchEnabled":
+            if let args = call.arguments as? [String: Any], let enabled = args["enabled"] as? Bool {
+                touchEnabled = enabled
             }
             result(nil)
         case "setPitchLock":
             if let args = call.arguments as? [String: Any], let locked = args["locked"] as? Bool {
                 renderer?.setPitchLock(locked)
+                wakeRenderLoop()
             }
             result(nil)
         case "setShowHint":
             if let args = call.arguments as? [String: Any], let show = args["enabled"] as? Bool {
                 renderer?.setShowHint(show)
+                wakeRenderLoop()
+            }
+            result(nil)
+        case "setBodyAlpha":
+            if let args = call.arguments as? [String: Any], let alpha = args["alpha"] as? NSNumber {
+                renderer?.setBodyAlpha(alpha.floatValue)
+                wakeRenderLoop()
+            }
+            result(nil)
+        case "setFaceColors":
+            if let args = call.arguments as? [String: Any], let colors = args["colors"] as? [NSNumber] {
+                renderer?.setFaceColors(colors)
+                wakeRenderLoop()
             }
             result(nil)
         case "setDebugLogs":
@@ -253,8 +322,8 @@ class TwizzlePlatformView: NSObject, FlutterPlatformView, UIGestureRecognizerDel
             result(renderer?.isPlaying() ?? false)
         case "isAnimating":
             result(renderer?.isAnimating() ?? false)
-        case "currentFraction":
-            result(renderer?.currentFraction() ?? 0.0)
+        case "getCurrentFraction", "currentFraction":
+            result(Double(renderer?.currentFraction() ?? 0.0))
         default:
             result(FlutterMethodNotImplemented)
         }

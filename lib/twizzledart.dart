@@ -257,7 +257,7 @@ class TwizzleViewController {
 }
 
 // ---------------------------------------------------------------------------
-// _TwizzleWindowsView — Windows implementation using Flutter Texture API
+// _TwizzleWindowsView — Windows & Linux implementation using Flutter Texture API
 // ---------------------------------------------------------------------------
 class _TwizzleWindowsView extends StatefulWidget {
   final String? initialAlgorithm;
@@ -292,7 +292,8 @@ class _TwizzleWindowsView extends StatefulWidget {
   State<_TwizzleWindowsView> createState() => _TwizzleWindowsViewState();
 }
 
-class _TwizzleWindowsViewState extends State<_TwizzleWindowsView> {
+class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
+    with WidgetsBindingObserver {
   static const MethodChannel _mainChannel = MethodChannel('twizzledart');
 
   int? _textureId;
@@ -301,13 +302,23 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _createView();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _controller?.pause();
+    }
   }
 
   Future<void> _createView() async {
     final params = <String, dynamic>{
-      'width': 1024,
-      'height': 1024,
+      'width': 512,
+      'height': 512,
       if (widget.initialAlgorithm != null) 'initialAlgorithm': widget.initialAlgorithm,
       'speed': widget.speed,
       'touchEnabled': widget.touchEnabled,
@@ -342,6 +353,7 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (_textureId != null) {
       _mainChannel.invokeMethod('disposeView', {'textureId': _textureId}).ignore();
     }
@@ -396,14 +408,14 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView> {
 }
 
 // ---------------------------------------------------------------------------
-// TwizzleView — public widget (Android + Windows)
+// TwizzleView — public widget (Android, iOS, macOS, Windows, Linux)
 // ---------------------------------------------------------------------------
 
 /// A native 3D Rubik's Cube view widget.
 ///
-/// - **Android**: OpenGL ES 3.0 via AndroidView (legacy; replaced in Phase 3).
-/// - **Windows**: WebGPU (DirectX 12) via Flutter Texture API.
-/// - **iOS/macOS**: coming in Phase 4 (WebGPU Metal backend).
+/// - **Android**: WebGPU via AndroidView (TextureView).
+/// - **Windows & Linux**: WebGPU via Flutter Texture API.
+/// - **iOS & macOS**: WebGPU Metal backend via UiKitView / AppKitView.
 class TwizzleView extends StatelessWidget {
   /// The initial sequence of moves (e.g., scramble or algorithm in WCA notation)
   /// applied to the cube when the view is initialized.
@@ -473,8 +485,9 @@ class TwizzleView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ── Windows & macOS: WebGPU via Flutter Texture API / Platform Views ───
-    if (defaultTargetPlatform == TargetPlatform.windows) {
+    // ── Windows & Linux: WebGPU via Flutter Texture API ─────────────────────
+    if (defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.linux) {
       return _TwizzleWindowsView(
         initialAlgorithm: initialAlgorithm,
         speed: speed,
@@ -491,7 +504,7 @@ class TwizzleView extends StatelessWidget {
       );
     }
 
-    // ── Android & iOS: Native Views (AndroidView / UiKitView) ───────────────
+    // ── Android, iOS & macOS: Native Views (AndroidView / UiKitView / AppKitView)
     if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.macOS) {
       const String viewType = 'twizzle_view';
       final Map<String, dynamic> creationParams = <String, dynamic>{

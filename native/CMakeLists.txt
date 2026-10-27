@@ -3,6 +3,7 @@ project(twizzle_native CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # =============================================================================
 # External dependencies
@@ -25,6 +26,7 @@ FetchContent_MakeAvailable(glm)
 #   x86_64-pc-windows-msvc     → DirectX 12 / Vulkan
 #   aarch64-linux-android      → Vulkan
 #   x86_64-linux-gnu           → Vulkan
+#   aarch64-linux-gnu          → Vulkan
 #   aarch64-apple-darwin       → Metal
 #   x86_64-apple-darwin        → Metal
 #   aarch64-apple-ios          → Metal
@@ -58,7 +60,11 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   set(WGPU_TARGET "ios-aarch64")
   set(WGPU_ARCHIVE_EXT "zip")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  set(WGPU_TARGET "linux-x86_64")
+  if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+    set(WGPU_TARGET "linux-aarch64")
+  else()
+    set(WGPU_TARGET "linux-x86_64")
+  endif()
   set(WGPU_ARCHIVE_EXT "zip")
 else()
   message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
@@ -139,7 +145,9 @@ target_link_libraries(twizzle_wgpu
     wgpu_native
 )
 
-# Android extra: link system libs
+# Platform extra system libs
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
   target_link_libraries(twizzle_wgpu PUBLIC android log EGL GLESv3)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(twizzle_wgpu PUBLIC dl pthread m)
 endif()

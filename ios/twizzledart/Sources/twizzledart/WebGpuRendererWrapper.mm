@@ -75,6 +75,10 @@
     return _renderer ? _renderer->isAnimating() : NO;
 }
 
+- (BOOL)needsRender {
+    return _renderer ? _renderer->needsRender() : NO;
+}
+
 - (void)play {
     if (_renderer) _renderer->play();
 }

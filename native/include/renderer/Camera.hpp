@@ -48,6 +48,9 @@ public:
     /// Sets whether vertical rotation is restricted to [-89, 89] degrees.
     void setPitchLock(bool locked);
 
+    /// Returns true while post-drag momentum decay is still rotating the camera.
+    bool isInertiaActive() const { return inertia_.active; }
+
     float latitude()  const { return latitude_; }
     float longitude() const { return longitude_; }
     float radius()    const { return radius_; }

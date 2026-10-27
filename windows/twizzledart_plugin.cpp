@@ -7,16 +7,12 @@
 //                                           └─ starts RenderLoop thread
 //                                           └─ opens per-view MethodChannel
 //
-//   RenderLoop (background thread, ~60 fps)
-//     WebGpuRenderer::render(dt)
-//       └─ renders to offscreen BGRA8 pixel buffer
+//   RenderLoop (background thread, ~60 fps when active, 0 fps when idle)
+//     Waits on inst->wakeCv when !renderer->needsRender()
+//     WebGpuRenderer::renderToBuffer(dt)
+//       └─ renders to offscreen RGBA8 pixel buffer
 //     TextureVariant::PixelBufferTexture::CopyPixelBuffer callback
 //       └─ Flutter reads the buffer on its compositor thread (zero-copy via ptr)
-//
-// The PixelBufferTexture approach is the simplest Windows texture path:
-//   flutter::TextureVariant  ← wraps a PixelBufferTexture callback
-//   FlutterDesktopPixelBuffer ← {data ptr, width, height}
-// Flutter calls CopyPixelBuffer() every time it composites the Texture widget.
 // =============================================================================
 #include "twizzledart_plugin.h"
 
@@ -24,6 +20,7 @@
 #include <flutter/method_result_functions.h>
 #include <flutter/texture_registrar.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <sstream>
@@ -103,6 +100,7 @@ TwizzledartPlugin::~TwizzledartPlugin() {
     std::lock_guard<std::mutex> lock(instancesMutex_);
     for (auto& [id, inst] : instances_) {
         inst->running = false;
+        inst->wakeCv.notify_all();
         if (inst->renderThread.joinable()) inst->renderThread.join();
     }
 }
@@ -140,8 +138,8 @@ void TwizzledartPlugin::OnCreateView(
     const auto* args = GetMap(*call.arguments());
     if (!args) { result->Error("INVALID_ARGS", "Expected map"); return; }
 
-    uint32_t width  = (uint32_t)GetDouble(*args, "width",  1024);
-    uint32_t height = (uint32_t)GetDouble(*args, "height", 1024);
+    uint32_t width  = (uint32_t)GetDouble(*args, "width",  512);
+    uint32_t height = (uint32_t)GetDouble(*args, "height", 512);
 
     // Parse creation params (mirrors Android TwizzledartPlugin)
     std::string initialAlgorithm = GetString(*args, "initialAlgorithm");
@@ -197,7 +195,6 @@ void TwizzledartPlugin::OnCreateView(
     inst->pixelBuffer  = std::make_unique<uint8_t[]>(width * height * 4);
 
     // ── Register Flutter PixelBufferTexture ──────────────────────────────
-    // Flutter calls this callback to pull each frame from our pixel buffer.
     auto* rawInst = inst.get();
     auto textureVariant = std::make_unique<flutter::TextureVariant>(
         flutter::PixelBufferTexture(
@@ -212,15 +209,9 @@ void TwizzledartPlugin::OnCreateView(
     inst->textureId = registrar_->texture_registrar()->RegisterTexture(
         textureVariant.get());
 
-    // Keep textureVariant alive (Flutter holds a raw ptr to it)
-    // We store it inside the instance via a generic holder.
-    // Since TextureVariant must outlive the texture registration, we move it
-    // into a heap-allocated unique_ptr stored as void* (erased type).
     struct TextureHolder { std::unique_ptr<flutter::TextureVariant> variant; };
     auto* holder = new TextureHolder{std::move(textureVariant)};
-    // Attach cleanup to the instance destructor via a lambda-captured deleter.
-    // We'll release it in OnDisposeView.
-    inst->renderer = nullptr; // will be set below
+    inst->renderer = nullptr;
 
     // ── Initialise WebGpuRenderer (pure offscreen rendering, no native HWND)
     {
@@ -263,11 +254,8 @@ void TwizzledartPlugin::OnCreateView(
         RenderLoop(rawInst);
     });
 
-    // Store holder raw ptr for cleanup (simple approach)
-    // We intentionally leak the TextureHolder until OnDisposeView because
-    // Flutter holds a raw ptr to the TextureVariant. In production this should
-    // be a proper shared_ptr or Flutter texture lifecycle hook.
-    (void)holder; // TODO: store in inst for proper cleanup
+    (void)holder;
+    (void)touchEnabled;
 
     int64_t registeredId = inst->textureId;
 
@@ -295,6 +283,7 @@ void TwizzledartPlugin::OnDisposeView(int64_t textureId) {
     }
 
     inst->running = false;
+    inst->wakeCv.notify_all();
     if (inst->renderThread.joinable()) inst->renderThread.join();
 
     registrar_->texture_registrar()->UnregisterTexture(textureId);
@@ -302,41 +291,50 @@ void TwizzledartPlugin::OnDisposeView(int64_t textureId) {
 }
 
 // ---------------------------------------------------------------------------
-// RenderLoop — background thread: ~60 fps render + Flutter texture mark dirty
+// RenderLoop — background thread: ~60 fps when active, 0 fps when idle
 // ---------------------------------------------------------------------------
 
 void TwizzledartPlugin::RenderLoop(CubeViewInstance* inst) {
     using Clock = std::chrono::steady_clock;
     auto prev   = Clock::now();
 
-    constexpr float kTargetFps  = 60.0f;
-    constexpr int   kFrameMs    = (int)(1000.0f / kTargetFps);
+    constexpr float kTargetFps = 60.0f;
+    constexpr int   kFrameMs   = (int)(1000.0f / kTargetFps);
 
     while (inst->running) {
-        auto now = Clock::now();
-        float dt = std::chrono::duration<float>(now - prev).count();
-        prev = now;
-
         bool frameRendered = false;
+        bool stillNeedsRender = false;
+
         {
-            std::lock_guard<std::mutex> lock(inst->rendererMutex);
+            std::unique_lock<std::mutex> lock(inst->rendererMutex);
+            inst->wakeCv.wait(lock, [inst]() {
+                return !inst->running ||
+                       (inst->renderer && inst->renderer->needsRender());
+            });
+            if (!inst->running) break;
+
+            auto now = Clock::now();
+            float dt = std::min(std::chrono::duration<float>(now - prev).count(), 0.05f);
+            prev = now;
+
             if (inst->renderer && inst->pixelBuffer) {
                 frameRendered = inst->renderer->renderToBuffer(dt, inst->pixelBuffer.get());
+                stillNeedsRender = inst->renderer->needsRender();
             }
         }
 
         if (frameRendered) {
-            // Tell Flutter the texture has new data
             registrar_->texture_registrar()->MarkTextureFrameAvailable(
                 inst->textureId);
         }
 
-        // Sleep to target ~60 fps
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            Clock::now() - prev).count();
-        int sleepMs = kFrameMs - (int)elapsed;
-        if (sleepMs > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+        if (stillNeedsRender && inst->running) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now() - prev).count();
+            int sleepMs = kFrameMs - (int)elapsed;
+            if (sleepMs > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+            }
         }
     }
 }
@@ -353,150 +351,161 @@ void TwizzledartPlugin::HandleViewMethodCall(
     CubeViewInstance* inst = FindInstance(textureId);
     if (!inst) { result->Error("NOT_FOUND", "View not found"); return; }
 
-    std::lock_guard<std::mutex> lock(inst->rendererMutex);
-    auto* r = inst->renderer.get();
+    bool shouldWake = false;
+    {
+        std::lock_guard<std::mutex> lock(inst->rendererMutex);
+        auto* r = inst->renderer.get();
 
-    const std::string& method = call.method_name();
-    const auto* args = call.arguments()
-        ? GetMap(*call.arguments())
-        : nullptr;
+        const std::string& method = call.method_name();
+        const auto* args = call.arguments()
+            ? GetMap(*call.arguments())
+            : nullptr;
 
-    // ── Algorithm & state ────────────────────────────────────────────────
-    if (method == "applyAlgorithm") {
-        std::string alg = args ? GetString(*args, "algorithm") : "";
-        if (r && !alg.empty()) r->applyAlgorithm(alg);
-        result->Success();
+        // ── Algorithm & state ────────────────────────────────────────────────
+        if (method == "applyAlgorithm") {
+            std::string alg = args ? GetString(*args, "algorithm") : "";
+            if (r && !alg.empty()) { r->applyAlgorithm(alg); shouldWake = true; }
+            result->Success();
 
-    } else if (method == "reset") {
-        if (r) r->reset();
-        result->Success();
+        } else if (method == "reset") {
+            if (r) { r->reset(); shouldWake = true; }
+            result->Success();
 
-    // ── Transport ────────────────────────────────────────────────────────
-    } else if (method == "play") {
-        if (r) r->play();
-        result->Success();
-    } else if (method == "pause") {
-        if (r) r->pause();
-        result->Success();
-    } else if (method == "stepForward") {
-        if (r) r->stepForward();
-        result->Success();
-    } else if (method == "stepBackward") {
-        if (r) r->stepBackward();
-        result->Success();
+        // ── Transport ────────────────────────────────────────────────────────
+        } else if (method == "play") {
+            if (r) { r->play(); shouldWake = true; }
+            result->Success();
+        } else if (method == "pause") {
+            if (r) { r->pause(); shouldWake = true; }
+            result->Success();
+        } else if (method == "stepForward") {
+            if (r) { r->stepForward(); shouldWake = true; }
+            result->Success();
+        } else if (method == "stepBackward") {
+            if (r) { r->stepBackward(); shouldWake = true; }
+            result->Success();
 
-    // ── Scrubbing ────────────────────────────────────────────────────────
-    } else if (method == "seekFraction") {
-        double f = args ? GetDouble(*args, "fraction") : 0.0;
-        if (r) r->seekFraction((float)f);
-        result->Success();
-    } else if (method == "getCurrentFraction") {
-        double frac = r ? r->currentFraction() : 0.0;
-        result->Success(EncodableValue(frac));
+        // ── Scrubbing ────────────────────────────────────────────────────────
+        } else if (method == "seekFraction") {
+            double f = args ? GetDouble(*args, "fraction") : 0.0;
+            if (r) { r->seekFraction((float)f); shouldWake = true; }
+            result->Success();
+        } else if (method == "getCurrentFraction") {
+            double frac = r ? r->currentFraction() : 0.0;
+            result->Success(EncodableValue(frac));
 
-    // ── Speed ────────────────────────────────────────────────────────────
-    } else if (method == "setSpeed") {
-        double s = args ? GetDouble(*args, "speed", 1.0) : 1.0;
-        if (r) r->setSpeed((float)s);
-        result->Success();
-    } else if (method == "getSpeed") {
-        double s = r ? r->getSpeed() : 1.0;
-        result->Success(EncodableValue(s));
+        // ── Speed ────────────────────────────────────────────────────────────
+        } else if (method == "setSpeed") {
+            double s = args ? GetDouble(*args, "speed", 1.0) : 1.0;
+            if (r) { r->setSpeed((float)s); shouldWake = true; }
+            result->Success();
+        } else if (method == "getSpeed") {
+            double s = r ? r->getSpeed() : 1.0;
+            result->Success(EncodableValue(s));
 
-    // ── State queries ────────────────────────────────────────────────────
-    } else if (method == "isAnimating") {
-        bool v = r && r->isAnimating();
-        result->Success(EncodableValue(v));
-    } else if (method == "isPlaying") {
-        bool v = r && r->isPlaying();
-        result->Success(EncodableValue(v));
+        // ── State queries ────────────────────────────────────────────────────
+        } else if (method == "isAnimating") {
+            bool v = r && r->isAnimating();
+            result->Success(EncodableValue(v));
+        } else if (method == "isPlaying") {
+            bool v = r && r->isPlaying();
+            result->Success(EncodableValue(v));
 
-    // ── Visual properties ─────────────────────────────────────────────────
-    } else if (method == "setBackgroundColor") {
-        if (r && args) {
-            float rr = (float)GetDouble(*args, "r", 0.08);
-            float gg = (float)GetDouble(*args, "g", 0.08);
-            float bb = (float)GetDouble(*args, "b", 0.10);
-            float aa = (float)GetDouble(*args, "a", 1.0);
-            r->setBackgroundColor(rr, gg, bb, aa);
-        }
-        result->Success();
+        // ── Visual properties ─────────────────────────────────────────────────
+        } else if (method == "setBackgroundColor") {
+            if (r && args) {
+                float rr = (float)GetDouble(*args, "r", 0.08);
+                float gg = (float)GetDouble(*args, "g", 0.08);
+                float bb = (float)GetDouble(*args, "b", 0.10);
+                float aa = (float)GetDouble(*args, "a", 1.0);
+                r->setBackgroundColor(rr, gg, bb, aa);
+                shouldWake = true;
+            }
+            result->Success();
 
-    } else if (method == "setCameraPosition") {
-        if (r && args) {
-            float lat = (float)GetDouble(*args, "latitude",  35.0);
-            float lon = (float)GetDouble(*args, "longitude", 30.0);
-            float rad = (float)GetDouble(*args, "radius",     6.0);
-            r->setCameraPosition(lat, lon, rad);
-        }
-        result->Success();
+        } else if (method == "setCameraPosition") {
+            if (r && args) {
+                float lat = (float)GetDouble(*args, "latitude",  35.0);
+                float lon = (float)GetDouble(*args, "longitude", 30.0);
+                float rad = (float)GetDouble(*args, "radius",     6.0);
+                r->setCameraPosition(lat, lon, rad);
+                shouldWake = true;
+            }
+            result->Success();
 
-    } else if (method == "setTouchEnabled") {
-        // Touch/mouse gestures are handled by Flutter gesture detectors in Dart;
-        // this flag is a no-op on Windows (gestures forwarded via drag methods).
-        result->Success();
+        } else if (method == "setTouchEnabled") {
+            result->Success();
 
-    } else if (method == "setPitchLock") {
-        bool locked = args ? GetBool(*args, "locked", true) : true;
-        if (r) r->setPitchLock(locked);
-        result->Success();
+        } else if (method == "setPitchLock") {
+            bool locked = args ? GetBool(*args, "locked", true) : true;
+            if (r) { r->setPitchLock(locked); shouldWake = true; }
+            result->Success();
 
-    } else if (method == "setShowHint") {
-        bool enabled = args ? GetBool(*args, "enabled", false) : false;
-        if (r) r->setShowHint(enabled);
-        result->Success();
+        } else if (method == "setShowHint") {
+            bool enabled = args ? GetBool(*args, "enabled", false) : false;
+            if (r) { r->setShowHint(enabled); shouldWake = true; }
+            result->Success();
 
-    } else if (method == "setBodyAlpha") {
-        double alpha = args ? GetDouble(*args, "alpha", 1.0) : 1.0;
-        if (r) r->setBodyAlpha((float)alpha);
-        result->Success();
+        } else if (method == "setBodyAlpha") {
+            double alpha = args ? GetDouble(*args, "alpha", 1.0) : 1.0;
+            if (r) { r->setBodyAlpha((float)alpha); shouldWake = true; }
+            result->Success();
 
-    } else if (method == "setFaceColors") {
-        if (r && args) {
-            auto fcIt = args->find(EncodableValue("colors"));
-            if (fcIt != args->end()) {
-                if (const auto* list = std::get_if<std::vector<EncodableValue>>(&fcIt->second)) {
-                    if (list->size() >= 18) {
-                        float fc[6][3] = {};
-                        for (int i = 0; i < 6; ++i)
-                        for (int j = 0; j < 3; ++j) {
-                            if (auto* d = std::get_if<double>(&(*list)[i*3+j]))
-                                fc[i][j] = (float)*d;
+        } else if (method == "setFaceColors") {
+            if (r && args) {
+                auto fcIt = args->find(EncodableValue("colors"));
+                if (fcIt != args->end()) {
+                    if (const auto* list = std::get_if<std::vector<EncodableValue>>(&fcIt->second)) {
+                        if (list->size() >= 18) {
+                            float fc[6][3] = {};
+                            for (int i = 0; i < 6; ++i)
+                            for (int j = 0; j < 3; ++j) {
+                                if (auto* d = std::get_if<double>(&(*list)[i*3+j]))
+                                    fc[i][j] = (float)*d;
+                            }
+                            r->setFaceColors(fc);
+                            shouldWake = true;
                         }
-                        r->setFaceColors(fc);
                     }
                 }
             }
-        }
-        result->Success();
+            result->Success();
 
-    // ── Mouse drag forwarding (from Dart GestureDetector) ────────────────
-    } else if (method == "onDragBegin") {
-        if (r && args) {
-            float x = (float)GetDouble(*args, "x");
-            float y = (float)GetDouble(*args, "y");
-            r->onDragBegin(x, y);
-        }
-        result->Success();
-    } else if (method == "onDragMove") {
-        if (r && args) {
-            float x = (float)GetDouble(*args, "x");
-            float y = (float)GetDouble(*args, "y");
-            r->onDragMove(x, y);
-        }
-        result->Success();
-    } else if (method == "onDragEnd") {
-        if (r) r->onDragEnd();
-        result->Success();
-    } else if (method == "onZoom") {
-        if (r && args) {
-            float delta = (float)GetDouble(*args, "delta");
-            r->onZoom(delta);
-        }
-        result->Success();
+        // ── Mouse drag forwarding (from Dart GestureDetector) ────────────────
+        } else if (method == "onDragBegin") {
+            if (r && args) {
+                float x = (float)GetDouble(*args, "x");
+                float y = (float)GetDouble(*args, "y");
+                r->onDragBegin(x, y);
+                shouldWake = true;
+            }
+            result->Success();
+        } else if (method == "onDragMove") {
+            if (r && args) {
+                float x = (float)GetDouble(*args, "x");
+                float y = (float)GetDouble(*args, "y");
+                r->onDragMove(x, y);
+                shouldWake = true;
+            }
+            result->Success();
+        } else if (method == "onDragEnd") {
+            if (r) { r->onDragEnd(); shouldWake = true; }
+            result->Success();
+        } else if (method == "onZoom") {
+            if (r && args) {
+                float delta = (float)GetDouble(*args, "delta");
+                r->onZoom(delta);
+                shouldWake = true;
+            }
+            result->Success();
 
-    } else {
-        result->NotImplemented();
+        } else {
+            result->NotImplemented();
+        }
+    }
+
+    if (shouldWake) {
+        inst->wakeCv.notify_one();
     }
 }
 
