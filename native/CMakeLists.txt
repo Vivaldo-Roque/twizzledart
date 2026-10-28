@@ -74,11 +74,19 @@ set(WGPU_ARCHIVE_NAME "wgpu-${WGPU_TARGET}-release.${WGPU_ARCHIVE_EXT}")
 set(WGPU_DOWNLOAD_URL
   "https://github.com/gfx-rs/wgpu-native/releases/download/${WGPU_VERSION}/${WGPU_ARCHIVE_NAME}")
 
-FetchContent_Declare(
-  wgpu_native
-  URL ${WGPU_DOWNLOAD_URL}
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+  cmake_policy(SET CMP0135 NEW)
+  FetchContent_Declare(
+    wgpu_native
+    URL ${WGPU_DOWNLOAD_URL}
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  )
+else()
+  FetchContent_Declare(
+    wgpu_native
+    URL ${WGPU_DOWNLOAD_URL}
+  )
+endif()
 FetchContent_MakeAvailable(wgpu_native)
 
 # Point to the extracted directory
