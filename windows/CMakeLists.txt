@@ -50,6 +50,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
   userenv.lib
   bcrypt.lib
   ntdll.lib
+  psapi.lib
 )
 
 # ---------------------------------------------------------------------------

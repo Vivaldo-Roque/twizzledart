@@ -192,6 +192,7 @@ private:
 
     // Offscreen render targets (Dual-Target: 1x Motion + 4x MSAA Resting)
     bool            isOffscreen_             = false;
+    bool            usesSharedDevice_        = false;
     WGPUTexture     renderTargetTexture_     = nullptr; ///< 1x resolve target (full width_ x height_)
     WGPUTexture     msaaColorTexture_        = nullptr; ///< 4x MSAA color attachment (full width_ x height_)
     WGPUTextureView msaaColorTextureView_    = nullptr;

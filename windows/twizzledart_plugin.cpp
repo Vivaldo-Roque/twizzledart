@@ -24,6 +24,8 @@
 #include <chrono>
 #include <cstring>
 #include <sstream>
+#include <windows.h>
+#include <psapi.h>
 
 // WebGPU renderer (native/)
 #include "renderer/WebGpuRenderer.hpp"
@@ -360,6 +362,10 @@ void TwizzledartPlugin::RenderLoop(CubeViewInstance* inst) {
             if (sleepMs > 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
             }
+        } else if (frameRendered && !stillNeedsRender) {
+            // Cube animation/interaction just settled into idle state.
+            // Trim transient staging pages back to OS standby list.
+            ::EmptyWorkingSet(::GetCurrentProcess());
         }
     }
 }

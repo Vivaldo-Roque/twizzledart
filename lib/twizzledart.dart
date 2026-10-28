@@ -378,9 +378,11 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
       logicalSide = 512.0;
     }
     final int rawPhysical = (logicalSide * dpr).round();
-    // Align to 64 pixels (64 * 4 = 256 bytes row pitch alignment in WebGPU)
+    // Align to 64 pixels (64 * 4 = 256 bytes row pitch alignment in WebGPU).
+    // Cap at 512px (with 4x MSAA = 2048x2048 effective edge sampling) to avoid
+    // 1024x1024 4x MSAA D3D12 heap bloat while keeping crisp anti-aliased edges.
     final int aligned = ((rawPhysical + 63) ~/ 64) * 64;
-    return aligned.clamp(384, 1024);
+    return aligned.clamp(320, 512);
   }
 
   void _onLayoutChanged(int targetSide) {

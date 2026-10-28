@@ -13,7 +13,14 @@
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <mutex>
 #include <wgpu/wgpu.h>
+#if defined(_WIN32)
+#include <windows.h>
+#include <psapi.h>
+#elif defined(__linux__) && !defined(__ANDROID__)
+#include <malloc.h>
+#endif
 #if defined(__ANDROID__)
 #include <android/log.h>
 #include <sys/system_properties.h>
@@ -107,9 +114,14 @@ static WGPUAdapter requestAdapterSync(WGPUInstance instance,
 #if !defined(__ANDROID__)
     opts.compatibleSurface = surface;
 #endif
-    // Prefer low-power (integrated GPU / efficiency core) to save battery
-    // on dual-GPU laptops and mobile devices.
+#if defined(_WIN32)
+    // On Windows, prefer HighPerformance (Discrete GPU like NVIDIA/AMD with dedicated VRAM).
+    // If not present, wgpu-native automatically selects the Integrated GPU (iGPU).
+    opts.powerPreference   = WGPUPowerPreference_HighPerformance;
+#else
+    // On mobile devices (Android/iOS), prefer low-power to save battery.
     opts.powerPreference   = WGPUPowerPreference_LowPower;
+#endif
 
     wgpuInstanceRequestAdapter(instance, &opts,
         [](WGPURequestAdapterStatus status, WGPUAdapter adapter, const char* msg, void* ud) {
@@ -149,6 +161,89 @@ static WGPUDevice requestDeviceSync(WGPUAdapter adapter) {
     return res.device;
 }
 
+struct SharedOffscreenContext {
+    std::mutex      mutex;
+    WGPUInstance    instance    = nullptr;
+    WGPUAdapter     adapter     = nullptr;
+    WGPUDevice      device      = nullptr;
+    WGPUQueue       queue       = nullptr;
+    WGPUAdapterType adapterType = WGPUAdapterType_Unknown;
+
+    bool ensureInitialized(bool debugLogs) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (device && queue) return true;
+
+        WGPUInstanceDescriptor instDesc = {};
+#if defined(_WIN32)
+        // Explicitly select ONLY the DirectX 12 backend on Windows so wgpu-native
+        // does not load and initialize Vulkan (vulkan-1.dll + ICDs + implicit layers)
+        // and OpenGL (opengl32.dll + vendor WGL ICD heaps) into the process address space.
+        WGPUInstanceExtras extras = {};
+        extras.chain.sType        = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
+        extras.backends           = WGPUInstanceBackend_DX12;
+        extras.flags              = WGPUInstanceFlag_DiscardHalLabels;
+        extras.dx12ShaderCompiler = WGPUDx12Compiler_Fxc;
+        instDesc.nextInChain      = reinterpret_cast<const WGPUChainedStruct*>(&extras);
+#elif defined(__linux__) && !defined(__ANDROID__)
+        WGPUInstanceExtras extras = {};
+        extras.chain.sType   = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
+        extras.backends      = WGPUInstanceBackend_Vulkan;
+        extras.flags         = WGPUInstanceFlag_DiscardHalLabels;
+        instDesc.nextInChain = reinterpret_cast<const WGPUChainedStruct*>(&extras);
+#endif
+        instance = wgpuCreateInstance(&instDesc);
+        if (instance) {
+            adapter = requestAdapterSync(instance, nullptr);
+        }
+
+        // Fallback to default backends if primary backend had no suitable adapter
+        if (!adapter) {
+            if (instance) {
+                wgpuInstanceRelease(instance);
+                instance = nullptr;
+            }
+            WGPUInstanceDescriptor fallbackDesc = {};
+            instance = wgpuCreateInstance(&fallbackDesc);
+            if (!instance) return false;
+            adapter = requestAdapterSync(instance, nullptr);
+            if (!adapter) {
+                wgpuInstanceRelease(instance);
+                instance = nullptr;
+                return false;
+            }
+        }
+
+        {
+            WGPUAdapterInfo adapterInfo = {};
+            wgpuAdapterGetInfo(adapter, &adapterInfo);
+            adapterType = adapterInfo.adapterType;
+            if (debugLogs) {
+                std::fprintf(stderr, "[Twizzle] Shared 3D Adapter: %s (%s), type=0x%x\n",
+                             adapterInfo.description ? adapterInfo.description : "unknown",
+                             adapterInfo.device ? adapterInfo.device : "unknown",
+                             (unsigned)adapterType);
+            }
+            wgpuAdapterInfoFreeMembers(adapterInfo);
+        }
+
+        device = requestDeviceSync(adapter);
+        if (!device) {
+            wgpuAdapterRelease(adapter);
+            wgpuInstanceRelease(instance);
+            adapter  = nullptr;
+            instance = nullptr;
+            return false;
+        }
+        queue = wgpuDeviceGetQueue(device);
+        return (queue != nullptr);
+    }
+};
+
+static SharedOffscreenContext& sharedOffscreenContext() {
+    static SharedOffscreenContext ctx;
+    return ctx;
+}
+
 // ---------------------------------------------------------------------------
 // Constructor / Destructor
 // ---------------------------------------------------------------------------
@@ -183,57 +278,74 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
     lastRenderedHeight_ = height_;
     camera_.setViewport((int)width_, (int)height_);
 
-    // 1. WebGPU Instance
-    WGPUInstanceDescriptor instDesc = {};
-#if defined(__ANDROID__)
-    WGPUInstanceExtras extras = {};
-    extras.chain.sType = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
-    if (isEmulatorDevice()) {
-        TW_LOGI("Android Emulator detected: selecting GLES (GL) backend for WebGPU");
-        extras.backends = WGPUInstanceBackend_GL;
+    // 1–4. WebGPU Instance, Surface, Adapter, Device + Queue
+    if (isOffscreen_) {
+        auto& shared = sharedOffscreenContext();
+        if (!shared.ensureInitialized(debugLogs_)) {
+            std::fprintf(stderr, "[Twizzle] Shared offscreen WebGPU initialization failed\n");
+            destroy();
+            return false;
+        }
+        instance_         = shared.instance;
+        adapter_          = shared.adapter;
+        device_           = shared.device;
+        queue_            = shared.queue;
+        adapterType_      = shared.adapterType;
+        usesSharedDevice_ = true;
     } else {
-        void* vklib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
-        if (vklib) {
-            dlclose(vklib);
-            TW_LOGI("Android Hardware device with Vulkan: selecting Vulkan backend");
-            extras.backends = WGPUInstanceBackend_Vulkan;
-        } else {
-            TW_LOGI("Android Hardware device without Vulkan: selecting GLES (GL) backend");
+        usesSharedDevice_ = false;
+        WGPUInstanceDescriptor instDesc = {};
+#if defined(__ANDROID__)
+        WGPUInstanceExtras extras = {};
+        extras.chain.sType = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
+        if (isEmulatorDevice()) {
+            TW_LOGI("Android Emulator detected: selecting GLES (GL) backend for WebGPU");
             extras.backends = WGPUInstanceBackend_GL;
+        } else {
+            void* vklib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+            if (vklib) {
+                dlclose(vklib);
+                TW_LOGI("Android Hardware device with Vulkan: selecting Vulkan backend");
+                extras.backends = WGPUInstanceBackend_Vulkan;
+            } else {
+                TW_LOGI("Android Hardware device without Vulkan: selecting GLES (GL) backend");
+                extras.backends = WGPUInstanceBackend_GL;
+            }
         }
-    }
-    instDesc.nextInChain = reinterpret_cast<const WGPUChainedStruct*>(&extras);
+        instDesc.nextInChain = reinterpret_cast<const WGPUChainedStruct*>(&extras);
+#elif defined(_WIN32)
+        WGPUInstanceExtras extras = {};
+        extras.chain.sType        = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
+        extras.backends           = WGPUInstanceBackend_DX12;
+        extras.flags              = WGPUInstanceFlag_DiscardHalLabels;
+        extras.dx12ShaderCompiler = WGPUDx12Compiler_Fxc;
+        instDesc.nextInChain      = reinterpret_cast<const WGPUChainedStruct*>(&extras);
 #endif
-    instance_ = wgpuCreateInstance(&instDesc);
-    if (!instance_) { std::fprintf(stderr, "[Twizzle] wgpuCreateInstance failed\n"); return false; }
+        instance_ = wgpuCreateInstance(&instDesc);
+        if (!instance_) { std::fprintf(stderr, "[Twizzle] wgpuCreateInstance failed\n"); return false; }
 
-    // 2. Platform Surface (only when not offscreen)
-    if (!isOffscreen_) {
         if (!createSurface(desc)) { destroy(); return false; }
-    }
 
-    // 3. Adapter
-    adapter_ = requestAdapterSync(instance_, isOffscreen_ ? nullptr : surface_);
-    if (!adapter_) { std::fprintf(stderr, "[Twizzle] No suitable WebGPU adapter\n"); destroy(); return false; }
+        adapter_ = requestAdapterSync(instance_, surface_);
+        if (!adapter_) { std::fprintf(stderr, "[Twizzle] No suitable WebGPU adapter\n"); destroy(); return false; }
 
-    // Detect GPU architecture (Discrete, Integrated, CPU) to optimize quality/power profile
-    {
-        WGPUAdapterInfo adapterInfo = {};
-        wgpuAdapterGetInfo(adapter_, &adapterInfo);
-        adapterType_ = adapterInfo.adapterType;
-        if (debugLogs_) {
-            std::fprintf(stderr, "[Twizzle] 3D Adapter: %s (%s), type=0x%x\n",
-                         adapterInfo.description ? adapterInfo.description : "unknown",
-                         adapterInfo.device ? adapterInfo.device : "unknown",
-                         (unsigned)adapterType_);
+        {
+            WGPUAdapterInfo adapterInfo = {};
+            wgpuAdapterGetInfo(adapter_, &adapterInfo);
+            adapterType_ = adapterInfo.adapterType;
+            if (debugLogs_) {
+                std::fprintf(stderr, "[Twizzle] 3D Adapter: %s (%s), type=0x%x\n",
+                             adapterInfo.description ? adapterInfo.description : "unknown",
+                             adapterInfo.device ? adapterInfo.device : "unknown",
+                             (unsigned)adapterType_);
+            }
+            wgpuAdapterInfoFreeMembers(adapterInfo);
         }
-        wgpuAdapterInfoFreeMembers(adapterInfo);
-    }
 
-    // 4. Device + Queue
-    device_ = requestDeviceSync(adapter_);
-    if (!device_) { std::fprintf(stderr, "[Twizzle] WebGPU device creation failed\n"); destroy(); return false; }
-    queue_ = wgpuDeviceGetQueue(device_);
+        device_ = requestDeviceSync(adapter_);
+        if (!device_) { std::fprintf(stderr, "[Twizzle] WebGPU device creation failed\n"); destroy(); return false; }
+        queue_ = wgpuDeviceGetQueue(device_);
+    }
 
     // 5. Configure swap-chain or offscreen target
     if (isOffscreen_) {
@@ -260,6 +372,15 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
 
     initialized_ = true;
     dirty_       = true;
+
+#if defined(_WIN32)
+    // Trim clean and unused D3D12 driver suballocator pages (staging/descriptor heaps)
+    // from the Working Set so Task Manager reflects only the active pages in use.
+    EmptyWorkingSet(GetCurrentProcess());
+#elif defined(__linux__) && !defined(__ANDROID__)
+    // Flush unused glibc heap chunks back to kernel via madvise(MADV_DONTNEED)
+    malloc_trim(0);
+#endif
     return true;
 }
 
@@ -375,6 +496,9 @@ void WebGpuRenderer::createOffscreenTarget() {
         wgpuBufferRelease(readbackBuffer_);
         readbackBuffer_ = nullptr;
     }
+    if (device_) {
+        wgpuDevicePoll(device_, true, nullptr);
+    }
 
     // Compute lightweight motion resolution (aligned to 64px = 256 bytes, capped at 640px)
     // for 60 FPS animations/dragging on integrated GPUs (Intel UHD / Iris Xe).
@@ -410,12 +534,14 @@ void WebGpuRenderer::createOffscreenTarget() {
     msaaColorTexture_     = wgpuDeviceCreateTexture(device_, &msaaTd);
     msaaColorTextureView_ = wgpuTextureCreateView(msaaColorTexture_, nullptr);
 
-    // 3. Lightweight 1x motion target (motionWidth_ x motionHeight_, no MSAA)
-    WGPUTextureDescriptor motionTd = td;
-    motionTd.label       = "TwizzleOffscreenMotion1x";
-    motionTd.size        = {motionWidth_, motionHeight_, 1};
-    motionTd.sampleCount = 1;
-    motionTargetTexture_ = wgpuDeviceCreateTexture(device_, &motionTd);
+    // 3. Lightweight 1x motion target (only allocate if dimensions differ from renderTargetTexture_)
+    if (motionWidth_ != width_ || motionHeight_ != height_) {
+        WGPUTextureDescriptor motionTd = td;
+        motionTd.label       = "TwizzleOffscreenMotion1x";
+        motionTd.size        = {motionWidth_, motionHeight_, 1};
+        motionTd.sampleCount = 1;
+        motionTargetTexture_ = wgpuDeviceCreateTexture(device_, &motionTd);
+    }
 
     // Row pitch must be aligned to 256 bytes in WebGPU
     bytesPerRow_       = (width_ * 4 + 255) & ~255;
@@ -445,6 +571,9 @@ void WebGpuRenderer::createDepthTexture() {
         wgpuTextureRelease(depthTextureMsaa_);
         depthTextureViewMsaa_ = nullptr;
         depthTextureMsaa_     = nullptr;
+    }
+    if (device_) {
+        wgpuDevicePoll(device_, true, nullptr);
     }
 
     const uint32_t dWidth  = isOffscreen_ ? motionWidth_  : width_;
@@ -851,11 +980,11 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     uint32_t    activeBytesPerRow  = bytesPerRow_;
 
     if (isOffscreen_) {
-        if (scaleMotionTarget && motionTargetTexture_) {
-            activeOffscreenTex       = motionTargetTexture_;
-            activeWidth              = motionWidth_;
-            activeHeight             = motionHeight_;
-            activeBytesPerRow        = motionBytesPerRow_;
+        if (scaleMotionTarget) {
+            activeOffscreenTex       = motionTargetTexture_ ? motionTargetTexture_ : renderTargetTexture_;
+            activeWidth              = motionTargetTexture_ ? motionWidth_         : width_;
+            activeHeight             = motionTargetTexture_ ? motionHeight_        : height_;
+            activeBytesPerRow        = motionTargetTexture_ ? motionBytesPerRow_   : bytesPerRow_;
             needsHighResSettleFrame_ = true;
         } else {
             activeOffscreenTex       = renderTargetTexture_;
@@ -1117,11 +1246,19 @@ void WebGpuRenderer::destroy() {
     if (device_) {
         wgpuDevicePoll(device_, true, nullptr);
     }
-    if (queue_)                { wgpuQueueRelease(queue_);                      queue_                = nullptr; }
-    if (device_)               { wgpuDeviceRelease(device_);                    device_               = nullptr; }
-    if (adapter_)              { wgpuAdapterRelease(adapter_);                  adapter_              = nullptr; }
-    if (surface_)              { wgpuSurfaceRelease(surface_);                  surface_              = nullptr; }
-    if (instance_)             { wgpuInstanceRelease(instance_);                instance_             = nullptr; }
+    if (usesSharedDevice_) {
+        queue_            = nullptr;
+        device_           = nullptr;
+        adapter_          = nullptr;
+        instance_         = nullptr;
+        usesSharedDevice_ = false;
+    } else {
+        if (queue_)    { wgpuQueueRelease(queue_);       queue_    = nullptr; }
+        if (device_)   { wgpuDeviceRelease(device_);     device_   = nullptr; }
+        if (adapter_)  { wgpuAdapterRelease(adapter_);   adapter_  = nullptr; }
+        if (surface_)  { wgpuSurfaceRelease(surface_);   surface_  = nullptr; }
+        if (instance_) { wgpuInstanceRelease(instance_); instance_ = nullptr; }
+    }
 
     vertices_.clear();
     vertices_.shrink_to_fit();
