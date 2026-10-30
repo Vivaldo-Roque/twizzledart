@@ -158,6 +158,7 @@ void TwizzledartPlugin::OnCreateView(
     double speed                 = GetDouble(*args, "speed",       1.0);
     bool   touchEnabled          = GetBool  (*args, "touchEnabled", true);
     bool   pitchLock             = GetBool  (*args, "pitchLock",    true);
+    bool   showFaceLetters       = GetBool  (*args, "showFaceLetters", false);
     double bodyAlpha             = GetDouble(*args, "bodyAlpha",    1.0);
 
     // Background colour
@@ -242,6 +243,7 @@ void TwizzledartPlugin::OnCreateView(
             renderer->setBackgroundColor((float)bgR, (float)bgG, (float)bgB, 1.0f);
             renderer->setSpeed((float)speed);
             renderer->setPitchLock(pitchLock);
+            renderer->setShowFaceLetters(showFaceLetters);
             renderer->setCameraPosition((float)camLat, (float)camLon, (float)camRad);
             renderer->setBodyAlpha((float)bodyAlpha);
             if (qualityProfile == "ultra") {
@@ -475,6 +477,11 @@ void TwizzledartPlugin::HandleViewMethodCall(
         } else if (method == "setShowHint") {
             bool enabled = args ? GetBool(*args, "enabled", false) : false;
             if (r) { r->setShowHint(enabled); shouldWake = true; }
+            result->Success();
+
+        } else if (method == "setShowFaceLetters") {
+            bool enabled = args ? GetBool(*args, "enabled", false) : false;
+            if (r) { r->setShowFaceLetters(enabled); shouldWake = true; }
             result->Success();
 
         } else if (method == "setBodyAlpha") {

@@ -64,6 +64,14 @@ public:
     static void build(std::vector<Vertex>&    vertices,
                       std::vector<CubieInfo>& cubies);
 
+    /// @brief Builds fixed face letter geometry (U, D, L, R, F, B) into the vertex buffer.
+    /// @param vertices Vertex buffer to append the letter triangles to.
+    /// @param letterOffset Output start index in vertices where letters begin.
+    /// @param letterCount  Output number of vertices belonging to face letters.
+    static void buildFaceLetters(std::vector<Vertex>& vertices,
+                                 int& letterOffset,
+                                 int& letterCount);
+
 private:
     /// Builds a single cubie at solved-state grid position (gx,gy,gz).
     static void buildCubie(int gx, int gy, int gz,

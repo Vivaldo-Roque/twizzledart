@@ -72,6 +72,9 @@ class TwizzlePlatformView(
         creationParams?.get("pitchLock")?.let {
             if (it is Boolean) cubeView.setPitchLock(it)
         }
+        creationParams?.get("showFaceLetters")?.let {
+            if (it is Boolean) cubeView.setShowFaceLetters(it)
+        }
         creationParams?.get("debugLogs")?.let {
             if (it is Boolean) cubeView.setDebugLogs(it)
         }
@@ -133,6 +136,10 @@ class TwizzlePlatformView(
             "setShowHint"        -> {
                 val enabled = call.argument<Boolean>("enabled") ?: false
                 cubeView.setShowHint(enabled); result.success(null)
+            }
+            "setShowFaceLetters" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                cubeView.setShowFaceLetters(enabled); result.success(null)
             }
             "setFaceColors"      -> {
                 val colors = call.argument<List<Double>>("colors")

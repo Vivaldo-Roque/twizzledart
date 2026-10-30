@@ -357,8 +357,9 @@ bool WebGpuRenderer::init(const SurfaceDescriptor& desc) {
     // 6. Depth texture
     createDepthTexture();
 
-    // 7. Build cube geometry
+    // 7. Build cube geometry + fixed face letters
     CubeGeometry::build(vertices_, cubies_);
+    CubeGeometry::buildFaceLetters(vertices_, letterOffset_, letterCount_);
     uploadVertexBuffer();
 
     // 8. Uniform buffer + staging buffer
@@ -638,8 +639,8 @@ void WebGpuRenderer::createUniformBuffer() {
     constexpr uint64_t kAlign = 256;
     constexpr uint64_t kFrameAligned = ((kFrameSize + kAlign - 1) / kAlign) * kAlign;
     constexpr uint64_t kCubieAligned = ((kCubieSize + kAlign - 1) / kAlign) * kAlign;
-    // 1 frame block + 26 cubie blocks
-    uint64_t totalSize = kFrameAligned + 26 * kCubieAligned;
+    // 1 frame block + 26 cubie blocks + 1 fixed face letters block
+    uint64_t totalSize = kFrameAligned + (26 + 1) * kCubieAligned;
 
     uniformStagingBuffer_.assign((size_t)totalSize, 0);
 
@@ -853,6 +854,10 @@ void WebGpuRenderer::rebuildBindGroup() {
         wgpuBindGroupRelease(frameBindGroup_);
         frameBindGroup_ = nullptr;
     }
+    if (faceLettersBindGroup_) {
+        wgpuBindGroupRelease(faceLettersBindGroup_);
+        faceLettersBindGroup_ = nullptr;
+    }
     for (auto bg : cubieBindGroups_) {
         if (bg) wgpuBindGroupRelease(bg);
     }
@@ -892,6 +897,20 @@ void WebGpuRenderer::rebuildBindGroup() {
         bgd1.entries    = &bge1;
         cubieBindGroups_[i] = wgpuDeviceCreateBindGroup(device_, &bgd1);
     }
+
+    // Bind group for fixed face letters
+    uint64_t lettersOffset = kFrameAligned + (uint64_t)cubies_.size() * kCubieAligned;
+    WGPUBindGroupEntry bgeLetters = {};
+    bgeLetters.binding = 0;
+    bgeLetters.buffer  = uniformBuffer_;
+    bgeLetters.offset  = lettersOffset;
+    bgeLetters.size    = kCubieSize;
+
+    WGPUBindGroupDescriptor bgdLetters = {};
+    bgdLetters.layout     = cubieBindGroupLayout_;
+    bgdLetters.entryCount = 1;
+    bgdLetters.entries    = &bgeLetters;
+    faceLettersBindGroup_ = wgpuDeviceCreateBindGroup(device_, &bgdLetters);
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,7 +1054,7 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
     constexpr uint64_t kCubieSize    = sizeof(float) * 20; // mat4 + vec4 (pad)
     constexpr uint64_t kCubieAligned = ((kCubieSize + kAlign - 1) / kAlign) * kAlign;
 
-    uint64_t requiredSize = kFrameAligned + cubies_.size() * kCubieAligned;
+    uint64_t requiredSize = kFrameAligned + (uint64_t)(cubies_.size() + 1) * kCubieAligned;
     if (uniformStagingBuffer_.size() < requiredSize) {
         uniformStagingBuffer_.resize((size_t)requiredSize, 0);
     }
@@ -1055,6 +1074,18 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
         uint64_t offset = kFrameAligned + (uint64_t)i * kCubieAligned;
         std::memcpy(uniformStagingBuffer_.data() + offset, &cb, kCubieSize);
     }
+
+    // Staging data for fixed face letters (identity model transform so they stay fixed)
+    uint64_t letterOffset = kFrameAligned + (uint64_t)cubies_.size() * kCubieAligned;
+    struct {
+        float model[16];
+        float params[4];
+    } letterCb;
+    glm::mat4 letterModel = glm::mat4(1.0f);
+    std::memcpy(letterCb.model, glm::value_ptr(letterModel), sizeof(letterCb.model));
+    letterCb.params[0] = 1.0f;
+    letterCb.params[1] = letterCb.params[2] = letterCb.params[3] = 0.0f;
+    std::memcpy(uniformStagingBuffer_.data() + letterOffset, &letterCb, kCubieSize);
 
     // Single consolidated buffer upload per frame instead of 27 calls
     wgpuQueueWriteBuffer(queue_, uniformBuffer_, 0,
@@ -1133,6 +1164,15 @@ bool WebGpuRenderer::renderInternal(float dt, uint8_t* destBuffer) {
         wgpuRenderPassEncoderSetBindGroup(pass, 1, cubieBindGroups_[i], 0, nullptr);
         wgpuRenderPassEncoderDraw(pass, (uint32_t)c.stickerCount, 1,
                                   (uint32_t)c.stickerOffset, 0);
+    }
+
+    // ── Pass 4: Fixed Face Letters (U, D, L, R, F, B) ──────────────────────
+    if (showFaceLetters_ && letterCount_ > 0 && faceLettersBindGroup_) {
+        wgpuRenderPassEncoderSetPipeline(pass, activeStickerPipe);
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, frameBindGroup_, 0, nullptr);
+        wgpuRenderPassEncoderSetBindGroup(pass, 1, faceLettersBindGroup_, 0, nullptr);
+        wgpuRenderPassEncoderDraw(pass, (uint32_t)letterCount_, 1,
+                                  (uint32_t)letterOffset_, 0);
     }
 
     wgpuRenderPassEncoderEnd(pass);
@@ -1219,6 +1259,7 @@ void WebGpuRenderer::destroy() {
         wgpuDevicePoll(device_, true, nullptr);
     }
     if (frameBindGroup_) { wgpuBindGroupRelease(frameBindGroup_); frameBindGroup_ = nullptr; }
+    if (faceLettersBindGroup_) { wgpuBindGroupRelease(faceLettersBindGroup_); faceLettersBindGroup_ = nullptr; }
     for (auto bg : cubieBindGroups_) {
         if (bg) wgpuBindGroupRelease(bg);
     }
@@ -1326,6 +1367,7 @@ void WebGpuRenderer::reset() {
     cube_.reset();
     animator_->clear();
     CubeGeometry::build(vertices_, cubies_);
+    CubeGeometry::buildFaceLetters(vertices_, letterOffset_, letterCount_);
     if (initialized_) uploadVertexBuffer();
     dirty_ = true;
 }
@@ -1372,6 +1414,10 @@ void WebGpuRenderer::setShowHint(bool show) {
     showHint_ = show;
     dirty_ = true;
 }
+void WebGpuRenderer::setShowFaceLetters(bool show) {
+    showFaceLetters_ = show;
+    dirty_ = true;
+}
 void WebGpuRenderer::setDebugLogs(bool enabled) {
     debugLogs_ = enabled;
 #if defined(__ANDROID__)
@@ -1384,6 +1430,7 @@ void WebGpuRenderer::setFaceColors(const float colors[6][3]) {
     for (int i = 0; i < 6; ++i) c[i] = {colors[i][0], colors[i][1], colors[i][2]};
     CubeGeometry::setFaceColors(c);
     CubeGeometry::build(vertices_, cubies_);
+    CubeGeometry::buildFaceLetters(vertices_, letterOffset_, letterCount_);
     if (initialized_) uploadVertexBuffer();
     dirty_ = true;
 }
@@ -1391,6 +1438,7 @@ void WebGpuRenderer::setFaceColors(const float colors[6][3]) {
 void WebGpuRenderer::setBodyAlpha(float alpha) {
     CubeGeometry::setBodyAlpha(alpha);
     CubeGeometry::build(vertices_, cubies_);
+    CubeGeometry::buildFaceLetters(vertices_, letterOffset_, letterCount_);
     if (initialized_) uploadVertexBuffer();
     dirty_ = true;
 }

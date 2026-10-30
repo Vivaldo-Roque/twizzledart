@@ -228,6 +228,15 @@ class TwizzleViewController {
     }
   }
 
+  /// Shows or hides uppercase face notation letters (U, D, L, R, F, B) on center pieces.
+  Future<void> setShowFaceLetters(bool enabled) async {
+    try {
+      await _channel.invokeMethod('setShowFaceLetters', {'enabled': enabled});
+    } on PlatformException catch (e) {
+      debugPrint("Error setting show face letters: ${e.message}");
+    }
+  }
+
   /// Sets sticker colours for all 6 faces (18 doubles: R,G,B per face).
   Future<void> setFaceColors(List<double> colors) async {
     assert(colors.length == 18);
@@ -305,6 +314,7 @@ class _TwizzleWindowsView extends StatefulWidget {
   final Map<String, double>? cameraPosition;
   final bool touchEnabled;
   final bool pitchLock;
+  final bool showFaceLetters;
   final bool debugLogs;
   final List<double>? faceColors;
   final TwizzleAppearance? appearance;
@@ -322,6 +332,7 @@ class _TwizzleWindowsView extends StatefulWidget {
     this.cameraPosition,
     this.touchEnabled = true,
     this.pitchLock = true,
+    this.showFaceLetters = false,
     this.debugLogs = false,
     this.faceColors,
     this.appearance,
@@ -411,6 +422,7 @@ class _TwizzleWindowsViewState extends State<_TwizzleWindowsView>
       'speed': widget.speed,
       'touchEnabled': widget.touchEnabled,
       'pitchLock': widget.pitchLock,
+      'showFaceLetters': widget.showFaceLetters,
       'debugLogs': widget.debugLogs,
       if (widget.backgroundColor != null) 'backgroundColor': widget.backgroundColor,
       if (widget.cameraPosition != null)  'cameraPosition':  widget.cameraPosition,
@@ -569,6 +581,10 @@ class TwizzleView extends StatefulWidget {
   /// Defaults to `true`.
   final bool pitchLock;
 
+  /// Whether to render uppercase face notation letters ('U', 'D', 'L', 'R', 'F', 'B') on center pieces.
+  /// Defaults to `false`.
+  final bool showFaceLetters;
+
   /// Whether native debug logs are enabled.
   /// Defaults to `false`.
   final bool debugLogs;
@@ -587,6 +603,7 @@ class TwizzleView extends StatefulWidget {
     this.cameraPosition,
     this.touchEnabled = true,
     this.pitchLock = true,
+    this.showFaceLetters = false,
     this.debugLogs = false,
     this.faceColors,
     this.appearance,
@@ -622,6 +639,7 @@ class _TwizzleViewState extends State<TwizzleView> {
         cameraPosition: widget.cameraPosition,
         touchEnabled: widget.touchEnabled,
         pitchLock: widget.pitchLock,
+        showFaceLetters: widget.showFaceLetters,
         debugLogs: widget.debugLogs,
         faceColors: widget.faceColors,
         appearance: widget.appearance,
@@ -640,6 +658,7 @@ class _TwizzleViewState extends State<TwizzleView> {
         'speed': widget.speed,
         'touchEnabled': widget.touchEnabled,
         'pitchLock': widget.pitchLock,
+        'showFaceLetters': widget.showFaceLetters,
         'debugLogs': widget.debugLogs,
         if (widget.backgroundColor != null) 'backgroundColor': widget.backgroundColor,
         if (widget.cameraPosition != null) 'cameraPosition': widget.cameraPosition,

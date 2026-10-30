@@ -298,6 +298,12 @@ Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetShowHin
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetShowFaceLetters(
+        JNIEnv*, jobject, jlong handle, jboolean enabled) {
+    if (auto* inst = toInstance(handle)) inst->renderer.setShowFaceLetters(enabled == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetBodyAlpha(
         JNIEnv*, jobject, jlong handle, jfloat alpha) {
     if (auto* inst = toInstance(handle)) inst->renderer.setBodyAlpha(alpha);

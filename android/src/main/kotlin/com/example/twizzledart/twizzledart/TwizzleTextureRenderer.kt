@@ -40,6 +40,7 @@ class TwizzleTextureRenderer(context: Context) :
     private var pendingFaceColors: FloatArray? = null
     private var pendingBodyAlpha: Float? = null
     private var pendingShowHint: Boolean? = null
+    private var pendingShowFaceLetters: Boolean? = null
     private var pendingPitchLock: Boolean? = null
     private var pendingDebugLogs: Boolean? = null
 
@@ -96,6 +97,7 @@ class TwizzleTextureRenderer(context: Context) :
         pendingFaceColors?.let { nativeSetFaceColors(nativeHandle, it) }
         pendingBodyAlpha?.let { nativeSetBodyAlpha(nativeHandle, it) }
         pendingShowHint?.let { nativeSetShowHint(nativeHandle, it) }
+        pendingShowFaceLetters?.let { nativeSetShowFaceLetters(nativeHandle, it) }
         pendingPitchLock?.let { nativeSetPitchLock(nativeHandle, it) }
         pendingDebugLogs?.let { nativeSetDebugLogs(nativeHandle, it) }
         pendingAlgorithm?.let { if (it.isNotEmpty()) nativeApplyAlgorithm(nativeHandle, it) }
@@ -342,6 +344,15 @@ class TwizzleTextureRenderer(context: Context) :
         }
     }
 
+    fun setShowFaceLetters(enabled: Boolean) {
+        if (nativeHandle != 0L) {
+            nativeSetShowFaceLetters(nativeHandle, enabled)
+            startRenderLoop()
+        } else {
+            pendingShowFaceLetters = enabled
+        }
+    }
+
     fun setFaceColors(colors: FloatArray) {
         if (nativeHandle != 0L) {
             nativeSetFaceColors(nativeHandle, colors)
@@ -412,6 +423,7 @@ class TwizzleTextureRenderer(context: Context) :
     private external fun nativeSetBackgroundColor(handle: Long, r: Float, g: Float, b: Float, a: Float)
     private external fun nativeSetCameraPosition(handle: Long, lat: Float, lon: Float, rad: Float)
     private external fun nativeSetShowHint(handle: Long, enabled: Boolean)
+    private external fun nativeSetShowFaceLetters(handle: Long, enabled: Boolean)
     private external fun nativeSetFaceColors(handle: Long, colors: FloatArray)
     private external fun nativeSetBodyAlpha(handle: Long, alpha: Float)
     private external fun nativeSetPitchLock(handle: Long, locked: Boolean)

@@ -130,6 +130,8 @@ public:
     void  setCameraPosition (float latitude, float longitude, float radius);
     void  setPitchLock      (bool  locked);
     void  setShowHint       (bool  show);
+    void  setShowFaceLetters(bool  show);
+    bool  showFaceLetters   () const { return showFaceLetters_; }
     void  setDebugLogs      (bool  enabled);
     void  setFaceColors     (const float colors[6][3]);
     void  setBodyAlpha      (float alpha);
@@ -173,6 +175,9 @@ private:
     // ── Cube state ────────────────────────────────────────────────────────
     std::vector<Vertex>    vertices_;
     std::vector<CubieInfo> cubies_;
+    int                    letterOffset_         = 0;
+    int                    letterCount_          = 0;
+    WGPUBindGroup          faceLettersBindGroup_ = nullptr;
     OrbitCamera                   camera_;
     std::unique_ptr<MoveAnimator> animator_;
     twizzle::Cube3x3              cube_;
@@ -184,9 +189,10 @@ private:
     WGPUTextureFormat surfaceFormat_ = WGPUTextureFormat_BGRA8Unorm; ///< detected at runtime
     // Background clear color (linear RGB, default off-white ~#F4F4F7)
     float    bgR_ = 0.91f, bgG_ = 0.91f, bgB_ = 0.93f, bgA_ = 1.0f;
-    bool     isPlaying_ = false;
-    bool     showHint_  = false;
-    bool     debugLogs_ = false;
+    bool     isPlaying_       = false;
+    bool     showHint_        = false;
+    bool     showFaceLetters_ = false;
+    bool     debugLogs_       = false;
     bool     dragging_  = false;
     float    lastDragX_ = 0, lastDragY_ = 0;
 

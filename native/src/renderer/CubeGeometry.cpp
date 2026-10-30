@@ -117,12 +117,185 @@ void CubeGeometry::buildCubie(int gx, int gy, int gz,
 }
 
 // ---------------------------------------------------------------------------
+// Face coordinates to 3D world space mapping (natural upright orientation)
+// ---------------------------------------------------------------------------
+static glm::vec3 faceToWorld(int faceIdx, float elev, float u, float v) {
+    switch (faceIdx) {
+    case 0: return {+elev, v, -u}; // +X (Right):  u -> -Z, v -> +Y
+    case 1: return {-elev, v,  u}; // -X (Left):   u -> +Z, v -> +Y
+    case 2: return { u, +elev, -v}; // +Y (Up):     u -> +X, v -> -Z
+    case 3: return { u, -elev,  v}; // -Y (Down):   u -> +X, v -> +Z
+    case 4: return { u, v, +elev}; // +Z (Front):  u -> +X, v -> +Y
+    case 5: return {-u, v, -elev}; // -Z (Back):   u -> -X, v -> +Y
+    default: return {0.0f, 0.0f, 0.0f};
+    }
+}
+
+static void appendFaceRect2D(int faceIdx, float elev,
+                             float u0, float vMin, float u1, float vMax,
+                             const glm::vec4& color,
+                             std::vector<Vertex>& out) {
+    glm::vec3 vert0 = faceToWorld(faceIdx, elev, u0, vMin);
+    glm::vec3 vert1 = faceToWorld(faceIdx, elev, u1, vMin);
+    glm::vec3 vert2 = faceToWorld(faceIdx, elev, u1, vMax);
+    glm::vec3 vert3 = faceToWorld(faceIdx, elev, u0, vMax);
+
+    out.push_back(Vertex{vert0, color}); out.push_back(Vertex{vert1, color}); out.push_back(Vertex{vert2, color});
+    out.push_back(Vertex{vert0, color}); out.push_back(Vertex{vert2, color}); out.push_back(Vertex{vert3, color});
+}
+
+static void appendFaceQuad2D(int faceIdx, float elev,
+                             const glm::vec2& p0, const glm::vec2& p1,
+                             const glm::vec2& p2, const glm::vec2& p3,
+                             const glm::vec4& color,
+                             std::vector<Vertex>& out) {
+    glm::vec3 vert0 = faceToWorld(faceIdx, elev, p0.x, p0.y);
+    glm::vec3 vert1 = faceToWorld(faceIdx, elev, p1.x, p1.y);
+    glm::vec3 vert2 = faceToWorld(faceIdx, elev, p2.x, p2.y);
+    glm::vec3 vert3 = faceToWorld(faceIdx, elev, p3.x, p3.y);
+
+    out.push_back(Vertex{vert0, color}); out.push_back(Vertex{vert1, color}); out.push_back(Vertex{vert2, color});
+    out.push_back(Vertex{vert0, color}); out.push_back(Vertex{vert2, color}); out.push_back(Vertex{vert3, color});
+}
+
+// ---------------------------------------------------------------------------
+// buildFaceLetters — fixed face letters (U, D, L, R, F, B)
+// ---------------------------------------------------------------------------
+void CubeGeometry::buildFaceLetters(std::vector<Vertex>& vertices,
+                                   int& letterOffset,
+                                   int& letterCount) {
+    letterOffset = (int)vertices.size();
+
+    // 1.0 (center cubie offset) + kStickerElev (0.503) + 0.002 = 1.505f
+    const float elev = 1.0f + kStickerElev + 0.002f;
+    const float w = 0.13f;
+    const float h = 0.18f;
+    const float t = 0.045f;
+
+    // Face index mapping:
+    // 0: +X -> 'R'
+    // 1: -X -> 'L'
+    // 2: +Y -> 'U'
+    // 3: -Y -> 'D'
+    // 4: +Z -> 'F'
+    // 5: -Z -> 'B'
+    for (int fi = 0; fi < 6; ++fi) {
+        const glm::vec3& fc = kFaceColor[fi];
+        float lum = 0.299f * fc.r + 0.587f * fc.g + 0.114f * fc.b;
+        glm::vec4 col = (lum > 0.55f)
+            ? glm::vec4(0.08f, 0.08f, 0.08f, 1.0f) // Dark charcoal on light faces
+            : glm::vec4(1.00f, 1.00f, 1.00f, 1.0f); // Pure white on dark faces
+
+        switch (fi) {
+        case 0: // 'R' (+X)
+            // Left vertical bar
+            appendFaceRect2D(fi, elev, -w, -h, -w + t, h, col, vertices);
+            // Top bar
+            appendFaceRect2D(fi, elev, -w + t, h - t, w - t * 1.2f, h, col, vertices);
+            // Mid bar
+            appendFaceRect2D(fi, elev, -w + t, 0.0f, w - t * 1.2f, t, col, vertices);
+            // Upper right bar
+            appendFaceRect2D(fi, elev, w - t, t * 0.8f, w, h - t * 0.8f, col, vertices);
+            // Top-right corner chamfer
+            appendFaceQuad2D(fi, elev,
+                {w - t * 1.2f, h - t}, {w - t * 1.2f, h},
+                {w, h - t * 0.8f}, {w - t, h - t * 0.8f},
+                col, vertices);
+            // Mid-right corner chamfer
+            appendFaceQuad2D(fi, elev,
+                {w - t * 1.2f, 0.0f}, {w - t * 1.2f, t},
+                {w, t * 0.8f}, {w - t, t * 0.8f},
+                col, vertices);
+            // Diagonal leg
+            appendFaceQuad2D(fi, elev,
+                {w - t, -h}, {w, -h},
+                {-w + t * 2.2f, 0.0f}, {-w + t * 1.2f, 0.0f},
+                col, vertices);
+            break;
+
+        case 1: // 'L' (-X)
+            // Left vertical bar
+            appendFaceRect2D(fi, elev, -w, -h, -w + t, h, col, vertices);
+            // Bottom bar
+            appendFaceRect2D(fi, elev, -w, -h, w, -h + t, col, vertices);
+            break;
+
+        case 2: // 'U' (+Y)
+            // Left vertical bar
+            appendFaceRect2D(fi, elev, -w, -h + t, -w + t, h, col, vertices);
+            // Right vertical bar
+            appendFaceRect2D(fi, elev, w - t, -h + t, w, h, col, vertices);
+            // Bottom horizontal bar
+            appendFaceRect2D(fi, elev, -w, -h, w, -h + t, col, vertices);
+            break;
+
+        case 3: // 'D' (-Y)
+            // Left vertical bar
+            appendFaceRect2D(fi, elev, -w, -h, -w + t, h, col, vertices);
+            // Top horizontal bar
+            appendFaceRect2D(fi, elev, -w + t, h - t, w - t * 1.5f, h, col, vertices);
+            // Bottom horizontal bar
+            appendFaceRect2D(fi, elev, -w + t, -h, w - t * 1.5f, -h + t, col, vertices);
+            // Right vertical bar
+            appendFaceRect2D(fi, elev, w - t, -h + t * 1.5f, w, h - t * 1.5f, col, vertices);
+            // Top-right corner chamfer
+            appendFaceQuad2D(fi, elev,
+                {w - t * 1.5f, h - t}, {w - t * 1.5f, h},
+                {w, h - t * 1.5f}, {w - t, h - t * 1.5f},
+                col, vertices);
+            // Bottom-right corner chamfer
+            appendFaceQuad2D(fi, elev,
+                {w - t * 1.5f, -h}, {w - t * 1.5f, -h + t},
+                {w - t, -h + t * 1.5f}, {w, -h + t * 1.5f},
+                col, vertices);
+            break;
+
+        case 4: // 'F' (+Z)
+            // Left vertical bar
+            appendFaceRect2D(fi, elev, -w, -h, -w + t, h, col, vertices);
+            // Top horizontal bar
+            appendFaceRect2D(fi, elev, -w + t, h - t, w, h, col, vertices);
+            // Middle horizontal bar
+            appendFaceRect2D(fi, elev, -w + t, 0.0f, w * 0.7f, t, col, vertices);
+            break;
+
+        case 5: // 'B' (-Z)
+            // Left vertical bar
+            appendFaceRect2D(fi, elev, -w, -h, -w + t, h, col, vertices);
+            // Top bar
+            appendFaceRect2D(fi, elev, -w + t, h - t, w - t * 1.2f, h, col, vertices);
+            // Mid bar
+            appendFaceRect2D(fi, elev, -w + t, -t * 0.5f, w - t * 1.2f, t * 0.5f, col, vertices);
+            // Bottom bar
+            appendFaceRect2D(fi, elev, -w + t, -h, w - t * 1.2f, -h + t, col, vertices);
+            // Upper right vertical bar
+            appendFaceRect2D(fi, elev, w - t, t * 0.5f, w, h - t * 0.8f, col, vertices);
+            // Lower right vertical bar
+            appendFaceRect2D(fi, elev, w - t, -h + t * 0.8f, w, -t * 0.5f, col, vertices);
+            // Top-right chamfer
+            appendFaceQuad2D(fi, elev,
+                {w - t * 1.2f, h - t}, {w - t * 1.2f, h},
+                {w, h - t * 0.8f}, {w - t, h - t * 0.8f},
+                col, vertices);
+            // Bottom-right chamfer
+            appendFaceQuad2D(fi, elev,
+                {w - t * 1.2f, -h}, {w - t * 1.2f, -h + t},
+                {w - t, -h + t * 0.8f}, {w, -h + t * 0.8f},
+                col, vertices);
+            break;
+        }
+    }
+
+    letterCount = (int)vertices.size() - letterOffset;
+}
+
+// ---------------------------------------------------------------------------
 // build — all 26 cubies
 // ---------------------------------------------------------------------------
 void CubeGeometry::build(std::vector<Vertex>&    vertices,
                           std::vector<CubieInfo>& cubies) {
     vertices.clear(); cubies.clear();
-    vertices.reserve(26 * 120); cubies.reserve(26);
+    vertices.reserve(26 * 120 + 300); cubies.reserve(26);
 
     for (int gx = -1; gx <= 1; ++gx)
     for (int gy = -1; gy <= 1; ++gy)
