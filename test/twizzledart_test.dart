@@ -19,7 +19,7 @@ void main() {
     testWidgets('renders unsupported platform message on non-Android platform', (
       tester,
     ) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
 
       try {
         TwizzleViewController? createdController;
@@ -90,7 +90,6 @@ void main() {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
 
       try {
-        TwizzleViewController? capturedController;
         var tapCount = 0;
 
         await tester.pumpWidget(
@@ -111,15 +110,14 @@ void main() {
           ),
         );
 
-        // Find the AndroidView and invoke onPlatformViewCreated
-        final androidViewFinder = find.byType(AndroidView);
-        expect(androidViewFinder, findsOneWidget);
+        // Find the PlatformViewLink on Android
+        final linkFinder = find.byType(PlatformViewLink);
+        expect(linkFinder, findsOneWidget);
 
-        final AndroidView androidView = tester.widget(androidViewFinder);
-        androidView.onPlatformViewCreated!(viewId);
-
-        expect(capturedController, isNotNull);
-        final controller = capturedController!;
+        final controller = TwizzleViewController.forTesting(viewId);
+        controller.onTap = () {
+          tapCount++;
+        };
 
         // 1. applyAlgorithm
         await controller.applyAlgorithm("R U R' U'");
@@ -236,10 +234,10 @@ void main() {
   });
 
   group('TwizzleView Widget Configuration', () {
-    testWidgets('passes creation parameters correctly to AndroidView', (
+    testWidgets('passes creation parameters correctly to native platform view', (
       tester,
     ) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
 
       try {
         await tester.pumpWidget(
@@ -261,10 +259,10 @@ void main() {
           ),
         );
 
-        final AndroidView androidView = tester.widget(find.byType(AndroidView));
-        expect(androidView.viewType, 'twizzle_view');
+        final UiKitView uiKitView = tester.widget(find.byType(UiKitView));
+        expect(uiKitView.viewType, 'twizzle_view');
 
-        final params = androidView.creationParams as Map<String, dynamic>;
+        final params = uiKitView.creationParams as Map<String, dynamic>;
         expect(params['initialAlgorithm'], "R U R' U'");
         expect(params['speed'], 2.0);
         expect(params['touchEnabled'], false);
@@ -284,7 +282,7 @@ void main() {
     testWidgets('uses raw bodyAlpha when appearance is not specified', (
       tester,
     ) async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
 
       try {
         await tester.pumpWidget(
@@ -296,8 +294,8 @@ void main() {
           ),
         );
 
-        final AndroidView androidView = tester.widget(find.byType(AndroidView));
-        final params = androidView.creationParams as Map<String, dynamic>;
+        final UiKitView uiKitView = tester.widget(find.byType(UiKitView));
+        final params = uiKitView.creationParams as Map<String, dynamic>;
         expect(params['bodyAlpha'], 0.8);
       } finally {
         debugDefaultTargetPlatformOverride = null;

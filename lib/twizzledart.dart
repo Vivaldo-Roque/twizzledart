@@ -64,6 +64,9 @@ class TwizzleViewController {
     _channel.setMethodCallHandler(_handleMethodCall);
   }
 
+  @visibleForTesting
+  factory TwizzleViewController.forTesting(int id) => TwizzleViewController._(id);
+
   Future<void> _handleMethodCall(MethodCall call) async {
     switch (call.method) {
       case 'onTap':
