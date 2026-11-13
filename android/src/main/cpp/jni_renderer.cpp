@@ -1,21 +1,23 @@
 // platform/android/jni_renderer.cpp
 // OpenGL ES 3.0 renderer bridge for Android via JNI.
-// Called by CubeGLSurfaceView.kt's Renderer implementation.
+// Called by TwizzleGLSurfaceView.kt's TwizzleRenderer implementation.
 
 #include <jni.h>
 #include <android/log.h>
+#include <string>
 #include "renderer/CubeRenderer.hpp"
 #include "twizzle/twizzle.hpp"
 
-#define LOG_TAG "TwizzleRenderer"
+#define LOG_TAG "TwizzleRendererGL"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 using namespace twizzle;
 using namespace twizzle::renderer;
 
-// One global renderer instance per GL context
-static CubeRenderer* g_renderer = nullptr;
+static inline CubeRenderer* toRenderer(jlong handle) {
+    return reinterpret_cast<CubeRenderer*>(handle);
+}
 
 // ---------------------------------------------------------------------------
 // Lifecycle — called by GLSurfaceView.Renderer
@@ -23,40 +25,52 @@ static CubeRenderer* g_renderer = nullptr;
 
 extern "C" {
 
+JNIEXPORT jlong JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeCreate(
+        JNIEnv*, jobject) {
+    auto* renderer = new CubeRenderer();
+    LOGI("Created CubeRenderer instance: %p", renderer);
+    return reinterpret_cast<jlong>(renderer);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeDestroy(
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) {
+        renderer->destroy();
+        delete renderer;
+        LOGI("Destroyed CubeRenderer instance: %p", renderer);
+    }
+}
+
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeOnSurfaceCreated(
-        JNIEnv*, jobject) {
-    if (g_renderer) { g_renderer->destroy(); delete g_renderer; }
-    g_renderer = new CubeRenderer();
-    if (!g_renderer->init()) {
-        LOGE("CubeRenderer::init() failed");
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    if (!renderer) return;
+    if (!renderer->init()) {
+        LOGE("CubeRenderer::init() failed on handle %p", renderer);
     } else {
-        LOGI("CubeRenderer initialised");
+        LOGI("CubeRenderer initialized on handle %p", renderer);
     }
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeOnSurfaceChanged(
-        JNIEnv*, jobject, jint width, jint height) {
-    if (g_renderer) g_renderer->resize(width, height);
-    LOGI("Surface changed: %d×%d", width, height);
+        JNIEnv*, jobject, jlong handle, jint width, jint height) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) {
+        renderer->resize(width, height);
+        LOGI("GL Surface changed: %d×%d", width, height);
+    }
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeOnDrawFrame(
-        JNIEnv*, jobject, jfloat dt) {
-    if (g_renderer) g_renderer->render(dt);
-}
-
-JNIEXPORT void JNICALL
-Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeOnDestroy(
-        JNIEnv*, jobject) {
-    if (g_renderer) {
-        g_renderer->destroy();
-        delete g_renderer;
-        g_renderer = nullptr;
-        LOGI("CubeRenderer destroyed");
-    }
+        JNIEnv*, jobject, jlong handle, jfloat dt) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->render(dt);
 }
 
 // ---------------------------------------------------------------------------
@@ -65,28 +79,31 @@ Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeOnDestroy(
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeOnDrag(
-        JNIEnv*, jobject, jfloat dx, jfloat dy) {
-    if (g_renderer) g_renderer->onDrag(dx, dy);
+        JNIEnv*, jobject, jlong handle, jfloat dx, jfloat dy) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->onDrag(dx, dy);
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeOnZoom(
-        JNIEnv*, jobject, jfloat delta) {
-    if (g_renderer) g_renderer->onZoom(delta);
+        JNIEnv*, jobject, jlong handle, jfloat delta) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->onZoom(delta);
 }
 
 // ---------------------------------------------------------------------------
-// Cube moves
+// Cube moves & animation
 // ---------------------------------------------------------------------------
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeApplyAlgorithm(
-        JNIEnv* env, jobject, jstring algStr) {
-    if (!g_renderer) return;
+        JNIEnv* env, jobject, jlong handle, jstring algStr) {
+    auto* renderer = toRenderer(handle);
+    if (!renderer || !algStr) return;
     const char* cAlg = env->GetStringUTFChars(algStr, nullptr);
     if (cAlg) {
         try {
-            g_renderer->applyAlgorithm(cAlg);
+            renderer->applyAlgorithm(cAlg);
             LOGI("Applied algorithm: %s", cAlg);
         } catch (const std::exception& e) {
             LOGE("Algorithm error: %s", e.what());
@@ -97,44 +114,51 @@ Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeApplyAlgorithm(
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeReset(
-        JNIEnv*, jobject) {
-    if (g_renderer) g_renderer->reset();
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->reset();
 }
 
 JNIEXPORT jboolean JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeIsAnimating(
-        JNIEnv*, jobject) {
-    return g_renderer && g_renderer->isAnimating() ? JNI_TRUE : JNI_FALSE;
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    return (renderer && renderer->isAnimating()) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetSpeed(
-        JNIEnv*, jobject, jfloat speed) {
-    if (g_renderer) g_renderer->setSpeed(speed);
+        JNIEnv*, jobject, jlong handle, jfloat speed) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->setSpeed(speed);
 }
 
 JNIEXPORT jfloat JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeGetSpeed(
-        JNIEnv*, jobject) {
-    return g_renderer ? g_renderer->getSpeed() : 1.0f;
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    return renderer ? renderer->getSpeed() : 1.0f;
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetShowHint(
-        JNIEnv*, jobject, jboolean enabled) {
-    if (g_renderer) g_renderer->setShowHint(enabled == JNI_TRUE);
+        JNIEnv*, jobject, jlong handle, jboolean enabled) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->setShowHint(enabled == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetBodyAlpha(
-        JNIEnv*, jobject, jfloat alpha) {
-    if (g_renderer) g_renderer->setBodyAlpha((float)alpha);
+        JNIEnv*, jobject, jlong handle, jfloat alpha) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->setBodyAlpha((float)alpha);
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetFaceColors(
-        JNIEnv* env, jobject, jfloatArray colors) {
-    if (!g_renderer) return;
+        JNIEnv* env, jobject, jlong handle, jfloatArray colors) {
+    auto* renderer = toRenderer(handle);
+    if (!renderer || !colors) return;
     jsize len = env->GetArrayLength(colors);
     if (len < 18) return;
     jfloat* elems = env->GetFloatArrayElements(colors, nullptr);
@@ -147,68 +171,89 @@ Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetFaceColors(
         faceColors[i][2] = elems[i * 3 + 2];
     }
     env->ReleaseFloatArrayElements(colors, elems, JNI_ABORT);
-    g_renderer->setFaceColors(faceColors);
+    renderer->setFaceColors(faceColors);
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativePlay(
-        JNIEnv*, jobject) {
-    if (g_renderer) g_renderer->play();
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->play();
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativePause(
-        JNIEnv*, jobject) {
-    if (g_renderer) g_renderer->pause();
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->pause();
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeStepForward(
-        JNIEnv*, jobject) {
-    if (g_renderer) g_renderer->stepForward();
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->stepForward();
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeStepBackward(
-        JNIEnv*, jobject) {
-    if (g_renderer) g_renderer->stepBackward();
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->stepBackward();
 }
 
 JNIEXPORT jboolean JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeIsPlaying(
-        JNIEnv*, jobject) {
-    return g_renderer && g_renderer->isPlaying() ? JNI_TRUE : JNI_FALSE;
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    return (renderer && renderer->isPlaying()) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetBackgroundColor(
-        JNIEnv*, jobject, jfloat r, jfloat g, jfloat b, jfloat a) {
-    if (g_renderer) g_renderer->setBackgroundColor(r, g, b, a);
+        JNIEnv*, jobject, jlong handle, jfloat red, jfloat green, jfloat blue, jfloat alpha) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->setBackgroundColor(red, green, blue, alpha);
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetCameraPosition(
-        JNIEnv*, jobject, jfloat lat, jfloat lon, jfloat rad) {
-    if (g_renderer) g_renderer->setCameraPosition(lat, lon, rad);
+        JNIEnv*, jobject, jlong handle, jfloat lat, jfloat lon, jfloat rad) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->setCameraPosition(lat, lon, rad);
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSeekFraction(
-        JNIEnv*, jobject, jfloat f) {
-    if (g_renderer) g_renderer->seekFraction(f);
+        JNIEnv*, jobject, jlong handle, jfloat f) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->seekFraction(f);
 }
 
 JNIEXPORT jfloat JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeCurrentFraction(
-        JNIEnv*, jobject) {
-    return g_renderer ? g_renderer->currentFraction() : 0.0f;
+        JNIEnv*, jobject, jlong handle) {
+    auto* renderer = toRenderer(handle);
+    return renderer ? renderer->currentFraction() : 0.0f;
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetPitchLock(
-        JNIEnv*, jobject, jboolean locked) {
-    if (g_renderer) g_renderer->setPitchLock(locked == JNI_TRUE);
+        JNIEnv*, jobject, jlong handle, jboolean locked) {
+    auto* renderer = toRenderer(handle);
+    if (renderer) renderer->setPitchLock(locked == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetShowFaceLetters(
+        JNIEnv*, jobject, jlong /*handle*/, jboolean /*enabled*/) {
+    // Face letter quads can be wired here if texture quad pipeline is extended to GLES
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleRenderer_nativeSetDebugLogs(
+        JNIEnv*, jobject, jlong /*handle*/, jboolean /*enabled*/) {
+    // Debug log flag
 }
 
 } // extern "C"
-

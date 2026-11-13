@@ -18,6 +18,8 @@
 // =============================================================================
 #include <jni.h>
 #include <android/log.h>
+
+#if !defined(TWIZZLE_NO_WGPU)
 #include <android/native_window_jni.h>
 #include <stdexcept>
 #include <string>
@@ -343,3 +345,143 @@ Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetDebugLo
 }
 
 } // extern "C"
+
+#else // defined(TWIZZLE_NO_WGPU)
+
+#define LOG_TAG "TwizzleWGPU"
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
+
+extern "C" {
+
+JNIEXPORT jlong JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeCreate(
+        JNIEnv*, jobject, jobject, jint, jint) {
+    LOGW("WebGPU is not supported on 32-bit armeabi-v7a");
+    return 0L;
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeDestroy(
+        JNIEnv*, jobject, jlong) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeResize(
+        JNIEnv*, jobject, jlong, jint, jint) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeRenderFrame(
+        JNIEnv*, jobject, jlong, jfloat) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeDragBegin(
+        JNIEnv*, jobject, jlong, jfloat, jfloat) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeDragMove(
+        JNIEnv*, jobject, jlong, jfloat, jfloat) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeDragEnd(
+        JNIEnv*, jobject, jlong) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeZoom(
+        JNIEnv*, jobject, jlong, jfloat) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeApplyAlgorithm(
+        JNIEnv*, jobject, jlong, jstring) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeReset(
+        JNIEnv*, jobject, jlong) {}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeIsAnimating(
+        JNIEnv*, jobject, jlong) {
+    return JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeNeedsRender(
+        JNIEnv*, jobject, jlong) {
+    return JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativePlay(
+        JNIEnv*, jobject, jlong) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativePause(
+        JNIEnv*, jobject, jlong) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeStepForward(
+        JNIEnv*, jobject, jlong) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeStepBackward(
+        JNIEnv*, jobject, jlong) {}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeIsPlaying(
+        JNIEnv*, jobject, jlong) {
+    return JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSeekFraction(
+        JNIEnv*, jobject, jlong, jfloat) {}
+
+JNIEXPORT jfloat JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeCurrentFraction(
+        JNIEnv*, jobject, jlong) {
+    return 0.0f;
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetSpeed(
+        JNIEnv*, jobject, jlong, jfloat) {}
+
+JNIEXPORT jfloat JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeGetSpeed(
+        JNIEnv*, jobject, jlong) {
+    return 1.0f;
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetBackgroundColor(
+        JNIEnv*, jobject, jlong, jfloat, jfloat, jfloat, jfloat) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetCameraPosition(
+        JNIEnv*, jobject, jlong, jfloat, jfloat, jfloat) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetShowHint(
+        JNIEnv*, jobject, jlong, jboolean) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetShowFaceLetters(
+        JNIEnv*, jobject, jlong, jboolean) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetBodyAlpha(
+        JNIEnv*, jobject, jlong, jfloat) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetFaceColors(
+        JNIEnv*, jobject, jlong, jfloatArray) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetPitchLock(
+        JNIEnv*, jobject, jlong, jboolean) {}
+
+JNIEXPORT void JNICALL
+Java_com_example_twizzledart_twizzledart_TwizzleTextureRenderer_nativeSetDebugLogs(
+        JNIEnv*, jobject, jlong, jboolean) {}
+
+} // extern "C"
+
+#endif // !defined(TWIZZLE_NO_WGPU)

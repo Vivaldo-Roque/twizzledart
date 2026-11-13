@@ -1,6 +1,8 @@
 package com.example.twizzledart.twizzledart
 
 import android.content.Context
+import android.content.pm.PackageManager
+import android.util.Log
 import android.view.View
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
@@ -8,12 +10,13 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.platform.PlatformView
 
 /**
- * [PlatformView] wrapping the WebGPU-backed [TwizzleTextureRenderer].
+ * [PlatformView] hosting either the modern WebGPU [TwizzleTextureRenderer]
+ * or the classic OpenGL ES 3.0 [TwizzleGLSurfaceView].
  *
- * Phase 3 change: `cubeView` is now a [TwizzleTextureRenderer] (TextureView +
- * Choreographer + wgpu-native/Vulkan) instead of [TwizzleGLSurfaceView]
- * (GLSurfaceView + OpenGL ES 3.0).  The public [MethodChannel] API is 100%
- * identical — no Dart-side changes required.
+ * Supports dynamic selection via creation parameter "backend":
+ *  - "opengl" / "opengles" / "gles" -> Forces OpenGL ES 3.0.
+ *  - "webgpu" / "vulkan"            -> Forces WebGPU (wgpu-native).
+ *  - "auto"                         -> Auto-detects Vulkan support, falling back to OpenGL ES 3.0.
  */
 class TwizzlePlatformView(
     context: Context,
@@ -22,8 +25,7 @@ class TwizzlePlatformView(
     messenger: BinaryMessenger
 ) : PlatformView, MethodChannel.MethodCallHandler {
 
-    // ── Phase 3: TextureView-based WebGPU renderer ─────────────────────────
-    private val cubeView: TwizzleTextureRenderer = TwizzleTextureRenderer(context)
+    private val cubeView: TwizzleCubeView = selectCubeView(context, creationParams?.get("backend") as? String)
     private val channel: MethodChannel = MethodChannel(messenger, "twizzledart_view_$id")
 
     init {
@@ -80,14 +82,14 @@ class TwizzlePlatformView(
         }
     }
 
-    override fun getView(): View = cubeView
+    override fun getView(): View = cubeView.getView()
 
     override fun dispose() {
         cubeView.onDestroyView()
         channel.setMethodCallHandler(null)
     }
 
-    // ── MethodChannel handler (identical API to Phase 1/2) ─────────────────
+    // ── MethodChannel handler ──────────────────────────────────────────────
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
@@ -163,6 +165,52 @@ class TwizzlePlatformView(
                 cubeView.setDebugLogs(enabled); result.success(null)
             }
             else -> result.notImplemented()
+        }
+    }
+
+    companion object {
+        private const val TAG = "TwizzlePlatformView"
+
+        /**
+         * Checks if the device has physical Vulkan hardware support (level >= 1).
+         */
+        fun isVulkanSupported(context: Context): Boolean {
+            return try {
+                val pm = context.packageManager
+                val hasVersion = pm.hasSystemFeature(PackageManager.FEATURE_VULKAN_HARDWARE_VERSION)
+                val hasLevel   = pm.hasSystemFeature(PackageManager.FEATURE_VULKAN_HARDWARE_LEVEL, 1)
+                hasVersion && hasLevel
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error checking Vulkan feature support: ${t.message}")
+                false
+            }
+        }
+
+        /**
+         * Dynamically chooses between [TwizzleTextureRenderer] (WebGPU)
+         * and [TwizzleGLSurfaceView] (OpenGL ES 3.0).
+         */
+        fun selectCubeView(context: Context, backendParam: String?): TwizzleCubeView {
+            val backend = backendParam?.lowercase() ?: "auto"
+            return when (backend) {
+                "opengl", "gles", "opengles", "gles3" -> {
+                    Log.i(TAG, "Backend requested: OpenGL ES 3.0 -> TwizzleGLSurfaceView")
+                    TwizzleGLSurfaceView(context)
+                }
+                "webgpu", "vulkan" -> {
+                    Log.i(TAG, "Backend requested: WebGPU -> TwizzleTextureRenderer")
+                    TwizzleTextureRenderer(context)
+                }
+                else -> {
+                    if (isVulkanSupported(context)) {
+                        Log.i(TAG, "Hardware Vulkan detected -> selecting WebGPU backend")
+                        TwizzleTextureRenderer(context)
+                    } else {
+                        Log.i(TAG, "Hardware Vulkan not detected -> falling back to OpenGL ES 3.0 backend")
+                        TwizzleGLSurfaceView(context)
+                    }
+                }
+            }
         }
     }
 }

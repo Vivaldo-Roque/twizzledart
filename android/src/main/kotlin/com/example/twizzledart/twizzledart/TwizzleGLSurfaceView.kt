@@ -1,11 +1,11 @@
 package com.example.twizzledart.twizzledart
 
 import android.content.Context
-import android.opengl.EGL14
-import android.opengl.GLES30
+import android.graphics.PixelFormat
 import android.opengl.GLSurfaceView
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
+import android.view.View
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -13,39 +13,38 @@ import javax.microedition.khronos.opengles.GL10
 // TwizzleGLSurfaceView
 // ---------------------------------------------------------------------------
 /**
- * Drop-in GLSurfaceView that renders the Rubik's cube via native C++ renderer.
+ * Drop-in OpenGL ES 3.0 GLSurfaceView that renders the Rubik's cube via native C++ renderer.
  *
- * Usage in your Activity/Fragment:
- *
- *   val cubeView = TwizzleGLSurfaceView(this)
- *   setContentView(cubeView)
- *
- *   // Apply moves from anywhere:
- *   cubeView.applyAlgorithm("R U R' U'")
- *   cubeView.reset()
+ * Implements [TwizzleCubeView], providing full API parity with [TwizzleTextureRenderer].
  */
-class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
+class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context), TwizzleCubeView {
+
+    override fun getView(): View = this
 
     private val renderer = TwizzleRenderer()
 
     // Touch state
-    var touchEnabled = true
-    var onTapListener: (() -> Unit)? = null
+    override var touchEnabled: Boolean = true
+    override var onTapListener: (() -> Unit)? = null
     private var isClickGesture = false
     private var lastTouchX = 0f
     private var lastTouchY = 0f
-    private var pointerCount = 0
     private var lastSpan = 0f
 
     private val scaleDetector = ScaleGestureDetector(context,
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
-                lastSpan = d.currentSpan; return true
+                lastSpan = d.currentSpan
+                return true
             }
             override fun onScale(detector: ScaleGestureDetector): Boolean {
                 val delta = (detector.currentSpan - lastSpan) * 0.01f
                 if (delta != 0f) {
-                    queueEvent { renderer.nativeOnZoom(delta) }
+                    queueEvent {
+                        if (renderer.nativeHandle != 0L) {
+                            renderer.nativeOnZoom(renderer.nativeHandle, delta)
+                        }
+                    }
                 }
                 lastSpan = detector.currentSpan
                 return true
@@ -55,8 +54,9 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
     init {
         setEGLContextClientVersion(3) // OpenGL ES 3.0
 
-        // Request MSAA (4×) — optional but improves quality
+        // Request 8888 with 16-bit depth buffer and 4× MSAA
         setEGLConfigChooser(8, 8, 8, 8, 16, 4)
+        holder.setFormat(PixelFormat.TRANSLUCENT)
 
         setRenderer(renderer)
         renderMode = RENDERMODE_CONTINUOUSLY
@@ -95,7 +95,6 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 wasScaling = false
-                pointerCount = e.pointerCount
                 lastTouchX   = e.x
                 lastTouchY   = e.y
             }
@@ -108,7 +107,11 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
                     } else {
                         val dx = e.x - lastTouchX
                         val dy = e.y - lastTouchY
-                        queueEvent { renderer.nativeOnDrag(dx, dy) }
+                        queueEvent {
+                            if (renderer.nativeHandle != 0L) {
+                                renderer.nativeOnDrag(renderer.nativeHandle, dx, dy)
+                            }
+                        }
                     }
                 }
                 lastTouchX = e.x
@@ -118,88 +121,185 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
         return true
     }
 
-    // ── Public API ─────────────────────────────────────────────────────────
+    // ── TwizzleCubeView API ─────────────────────────────────────────────────
 
-    fun applyAlgorithm(alg: String) {
-        queueEvent { renderer.nativeApplyAlgorithm(alg) }
+    override fun applyAlgorithm(alg: String) {
+        renderer.cachedAlgorithm = alg
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeApplyAlgorithm(renderer.nativeHandle, alg)
+            }
+        }
     }
 
-    fun reset() {
-        queueEvent { renderer.nativeReset() }
+    override fun reset() {
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeReset(renderer.nativeHandle)
+            }
+        }
     }
 
-    fun isAnimating(): Boolean = renderer.nativeIsAnimating()
-
-    fun play() {
-        queueEvent { renderer.nativePlay() }
+    override fun isAnimating(): Boolean {
+        return if (renderer.nativeHandle != 0L) renderer.nativeIsAnimating(renderer.nativeHandle)
+        else false
     }
 
-    fun pause() {
-        queueEvent { renderer.nativePause() }
+    override fun play() {
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativePlay(renderer.nativeHandle)
+            }
+        }
     }
 
-    fun stepForward() {
-        queueEvent { renderer.nativeStepForward() }
+    override fun pause() {
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativePause(renderer.nativeHandle)
+            }
+        }
     }
 
-    fun stepBackward() {
-        queueEvent { renderer.nativeStepBackward() }
+    override fun stepForward() {
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeStepForward(renderer.nativeHandle)
+            }
+        }
     }
 
-    fun isPlaying(): Boolean = renderer.nativeIsPlaying()
-
-    /** Animation speed: 1.0 = default, 2.0 = twice as fast, 0.5 = half speed. */
-    fun setSpeed(speed: Float) {
-        queueEvent { renderer.nativeSetSpeed(speed) }
+    override fun stepBackward() {
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeStepBackward(renderer.nativeHandle)
+            }
+        }
     }
 
-    fun getSpeed(): Float = renderer.nativeGetSpeed()
+    override fun isPlaying(): Boolean {
+        return if (renderer.nativeHandle != 0L) renderer.nativeIsPlaying(renderer.nativeHandle)
+        else false
+    }
 
-    fun setGLBackgroundColor(r: Float, g: Float, b: Float, a: Float) {
+    override fun setSpeed(speed: Float) {
+        renderer.cachedSpeed = speed
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSetSpeed(renderer.nativeHandle, speed)
+            }
+        }
+    }
+
+    override fun getSpeed(): Float {
+        return if (renderer.nativeHandle != 0L) renderer.nativeGetSpeed(renderer.nativeHandle)
+        else renderer.cachedSpeed ?: 1.0f
+    }
+
+    override fun setGLBackgroundColor(r: Float, g: Float, b: Float, a: Float) {
         renderer.cachedBgColor = floatArrayOf(r, g, b, a)
-        queueEvent { renderer.nativeSetBackgroundColor(r, g, b, a) }
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSetBackgroundColor(renderer.nativeHandle, r, g, b, a)
+            }
+        }
     }
 
-    fun setCameraPosition(lat: Float, lon: Float, rad: Float) {
+    override fun setCameraPosition(lat: Float, lon: Float, rad: Float) {
         renderer.cachedCameraPosition = floatArrayOf(lat, lon, rad)
-        queueEvent { renderer.nativeSetCameraPosition(lat, lon, rad) }
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSetCameraPosition(renderer.nativeHandle, lat, lon, rad)
+            }
+        }
     }
 
-    fun setShowHint(enabled: Boolean) {
+    override fun setShowHint(enabled: Boolean) {
         renderer.cachedShowHint = enabled
-        queueEvent { renderer.nativeSetShowHint(enabled) }
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSetShowHint(renderer.nativeHandle, enabled)
+            }
+        }
     }
 
-    /** Sets face colours as 18 floats (6 faces × RGB). */
-    fun setFaceColors(colors: FloatArray) {
+    override fun setShowFaceLetters(enabled: Boolean) {
+        renderer.cachedShowFaceLetters = enabled
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSetShowFaceLetters(renderer.nativeHandle, enabled)
+            }
+        }
+    }
+
+    override fun setFaceColors(colors: FloatArray) {
         renderer.cachedFaceColors = colors
-        queueEvent { renderer.nativeSetFaceColors(colors) }
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSetFaceColors(renderer.nativeHandle, colors)
+            }
+        }
     }
 
-    /** Sets cubie body (foundation) alpha: 0.3 = crystal, 1.0 = opaque black. */
-    fun setBodyAlpha(alpha: Float) {
+    override fun setBodyAlpha(alpha: Float) {
         renderer.cachedBodyAlpha = alpha
-        queueEvent { renderer.nativeSetBodyAlpha(alpha) }
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSetBodyAlpha(renderer.nativeHandle, alpha)
+            }
+        }
     }
 
-    fun seekFraction(f: Float) {
-        queueEvent { renderer.nativeSeekFraction(f) }
+    override fun seekFraction(f: Float) {
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSeekFraction(renderer.nativeHandle, f)
+            }
+        }
     }
 
-    fun getCurrentFraction(): Float {
-        return renderer.nativeCurrentFraction()
+    override fun getCurrentFraction(): Float {
+        return if (renderer.nativeHandle != 0L) renderer.nativeCurrentFraction(renderer.nativeHandle)
+        else 0.0f
     }
 
-    fun setPitchLock(locked: Boolean) {
+    override fun setPitchLock(locked: Boolean) {
         renderer.cachedPitchLock = locked
-        queueEvent { renderer.nativeSetPitchLock(locked) }
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSetPitchLock(renderer.nativeHandle, locked)
+            }
+        }
     }
 
-    // ── Lifecycle ──────────────────────────────────────────────────────────
+    override fun setDebugLogs(enabled: Boolean) {
+        renderer.cachedDebugLogs = enabled
+        queueEvent {
+            if (renderer.nativeHandle != 0L) {
+                renderer.nativeSetDebugLogs(renderer.nativeHandle, enabled)
+            }
+        }
+    }
+
+    override fun onDestroyView() {
+        queueEvent {
+            renderer.onDestroy()
+        }
+        try {
+            onPause()
+        } catch (_: Throwable) {}
+    }
 
     override fun onPause() {
         super.onPause()
-        queueEvent { renderer.nativeOnDestroy() }
+        queueEvent {
+            renderer.onDestroy()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        onDestroyView()
+        super.onDetachedFromWindow()
     }
 }
 
@@ -208,78 +308,117 @@ class TwizzleGLSurfaceView(context: Context) : GLSurfaceView(context) {
 // ---------------------------------------------------------------------------
 class TwizzleRenderer : GLSurfaceView.Renderer {
 
+    var nativeHandle: Long = 0L
     private var lastNano = System.nanoTime()
 
     var cachedBgColor: FloatArray? = null
     var cachedCameraPosition: FloatArray? = null
     var cachedShowHint: Boolean? = null
+    var cachedShowFaceLetters: Boolean? = null
     var cachedFaceColors: FloatArray? = null
     var cachedBodyAlpha: Float? = null
     var cachedPitchLock: Boolean? = null
+    var cachedSpeed: Float? = null
+    var cachedAlgorithm: String? = null
+    var cachedDebugLogs: Boolean? = null
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        nativeOnSurfaceCreated()
-        lastNano = System.nanoTime()
+        if (nativeHandle != 0L) {
+            nativeDestroy(nativeHandle)
+            nativeHandle = 0L
+        }
+        nativeHandle = nativeCreate()
+        if (nativeHandle != 0L) {
+            nativeOnSurfaceCreated(nativeHandle)
+            lastNano = System.nanoTime()
 
-        cachedBgColor?.let {
-            nativeSetBackgroundColor(it[0], it[1], it[2], it[3])
-        }
-        cachedCameraPosition?.let {
-            nativeSetCameraPosition(it[0], it[1], it[2])
-        }
-        cachedShowHint?.let {
-            nativeSetShowHint(it)
-        }
-        cachedFaceColors?.let {
-            nativeSetFaceColors(it)
-        }
-        cachedBodyAlpha?.let {
-            nativeSetBodyAlpha(it)
-        }
-        cachedPitchLock?.let {
-            nativeSetPitchLock(it)
+            cachedBgColor?.let {
+                nativeSetBackgroundColor(nativeHandle, it[0], it[1], it[2], it[3])
+            }
+            cachedCameraPosition?.let {
+                nativeSetCameraPosition(nativeHandle, it[0], it[1], it[2])
+            }
+            cachedShowHint?.let {
+                nativeSetShowHint(nativeHandle, it)
+            }
+            cachedShowFaceLetters?.let {
+                nativeSetShowFaceLetters(nativeHandle, it)
+            }
+            cachedFaceColors?.let {
+                nativeSetFaceColors(nativeHandle, it)
+            }
+            cachedBodyAlpha?.let {
+                nativeSetBodyAlpha(nativeHandle, it)
+            }
+            cachedPitchLock?.let {
+                nativeSetPitchLock(nativeHandle, it)
+            }
+            cachedSpeed?.let {
+                nativeSetSpeed(nativeHandle, it)
+            }
+            cachedAlgorithm?.let {
+                nativeApplyAlgorithm(nativeHandle, it)
+            }
+            cachedDebugLogs?.let {
+                nativeSetDebugLogs(nativeHandle, it)
+            }
         }
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-        nativeOnSurfaceChanged(width, height)
+        if (nativeHandle != 0L) {
+            nativeOnSurfaceChanged(nativeHandle, width, height)
+        }
     }
 
     override fun onDrawFrame(gl: GL10?) {
+        if (nativeHandle == 0L) return
         val now  = System.nanoTime()
         val dt   = (now - lastNano) / 1_000_000_000f
         lastNano = now
-        nativeOnDrawFrame(dt.coerceIn(0f, 0.05f))
+        nativeOnDrawFrame(nativeHandle, dt.coerceIn(0f, 0.05f))
+    }
+
+    fun onDestroy() {
+        if (nativeHandle != 0L) {
+            val h = nativeHandle
+            nativeHandle = 0L
+            nativeDestroy(h)
+        }
     }
 
     // ── JNI declarations ──────────────────────────────────────────────────
 
-    external fun nativeOnSurfaceCreated()
-    external fun nativeOnSurfaceChanged(width: Int, height: Int)
-    external fun nativeOnDrawFrame(dt: Float)
-    external fun nativeOnDestroy()
+    external fun nativeCreate(): Long
+    external fun nativeDestroy(handle: Long)
 
-    external fun nativeOnDrag(dx: Float, dy: Float)
-    external fun nativeOnZoom(delta: Float)
+    external fun nativeOnSurfaceCreated(handle: Long)
+    external fun nativeOnSurfaceChanged(handle: Long, width: Int, height: Int)
+    external fun nativeOnDrawFrame(handle: Long, dt: Float)
 
-    external fun nativeApplyAlgorithm(alg: String)
-    external fun nativeReset()
-    external fun nativeIsAnimating(): Boolean
-    external fun nativeSetSpeed(speed: Float)
-    external fun nativeGetSpeed(): Float
-    external fun nativePlay()
-    external fun nativePause()
-    external fun nativeStepForward()
-    external fun nativeStepBackward()
-    external fun nativeIsPlaying(): Boolean
-    external fun nativeSetBackgroundColor(r: Float, g: Float, b: Float, a: Float)
-    external fun nativeSetCameraPosition(lat: Float, lon: Float, rad: Float)
-    external fun nativeSeekFraction(f: Float)
-    external fun nativeCurrentFraction(): Float
-    external fun nativeSetShowHint(enabled: Boolean)
-    external fun nativeSetFaceColors(colors: FloatArray)
-    external fun nativeSetBodyAlpha(alpha: Float)
-    external fun nativeSetPitchLock(locked: Boolean)
+    external fun nativeOnDrag(handle: Long, dx: Float, dy: Float)
+    external fun nativeOnZoom(handle: Long, delta: Float)
+
+    external fun nativeApplyAlgorithm(handle: Long, alg: String)
+    external fun nativeReset(handle: Long)
+    external fun nativeIsAnimating(handle: Long): Boolean
+    external fun nativeSetSpeed(handle: Long, speed: Float)
+    external fun nativeGetSpeed(handle: Long): Float
+    external fun nativePlay(handle: Long)
+    external fun nativePause(handle: Long)
+    external fun nativeStepForward(handle: Long)
+    external fun nativeStepBackward(handle: Long)
+    external fun nativeIsPlaying(handle: Long): Boolean
+    external fun nativeSetBackgroundColor(handle: Long, r: Float, g: Float, b: Float, a: Float)
+    external fun nativeSetCameraPosition(handle: Long, lat: Float, lon: Float, rad: Float)
+    external fun nativeSeekFraction(handle: Long, f: Float)
+    external fun nativeCurrentFraction(handle: Long): Float
+    external fun nativeSetShowHint(handle: Long, enabled: Boolean)
+    external fun nativeSetShowFaceLetters(handle: Long, enabled: Boolean)
+    external fun nativeSetFaceColors(handle: Long, colors: FloatArray)
+    external fun nativeSetBodyAlpha(handle: Long, alpha: Float)
+    external fun nativeSetPitchLock(handle: Long, locked: Boolean)
+    external fun nativeSetDebugLogs(handle: Long, enabled: Boolean)
 
     companion object {
         init { System.loadLibrary("twizzle") }

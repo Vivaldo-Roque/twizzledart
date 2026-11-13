@@ -50,9 +50,7 @@ android {
         // (VK_KHR_surface + VkSurfaceKHR available since API 26)
         minSdk = 26
         ndk {
-            // armeabi-v7a dropped: 32-bit ARM has no Vulkan support on most devices.
-            // x86 dropped: emulator-only, not relevant for production.
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }
         externalNativeBuild {
             cmake {

@@ -31,6 +31,26 @@ enum TwizzleQualityMode {
   batterySaver,
 }
 
+/// Graphics backend used to render the 3D Rubik's cube.
+enum TwizzleBackend {
+  /// Automatically selects the best available backend.
+  /// Uses WebGPU (Vulkan) on modern hardware, and automatically falls back
+  /// to OpenGL ES 3.0 on Android devices or emulators without Vulkan.
+  auto,
+
+  /// Forces the modern WebGPU backend (via wgpu-native).
+  webgpu,
+
+  /// Forces the native OpenGL ES 3.0 renderer (via GLSurfaceView on Android).
+  opengl,
+}
+
+/// Global configuration for Twizzle.
+abstract final class TwizzleConfig {
+  /// Default graphics backend for all [TwizzleView] widgets when not specified explicitly.
+  static TwizzleBackend defaultBackend = TwizzleBackend.auto;
+}
+
 /// Controller to apply algorithms and manage the state of a [TwizzleView].
 class TwizzleViewController {
   final int _id;
@@ -589,6 +609,10 @@ class TwizzleView extends StatefulWidget {
   /// Defaults to `false`.
   final bool debugLogs;
 
+  /// The graphics backend to use for rendering the cube.
+  /// If null, defaults to [TwizzleConfig.defaultBackend].
+  final TwizzleBackend? backend;
+
   /// Callback triggered once the native platform view is created.
   final TwizzleViewCreatedCallback? onViewCreated;
 
@@ -605,6 +629,7 @@ class TwizzleView extends StatefulWidget {
     this.pitchLock = true,
     this.showFaceLetters = false,
     this.debugLogs = false,
+    this.backend,
     this.faceColors,
     this.appearance,
     this.qualityMode = TwizzleQualityMode.auto,
@@ -653,7 +678,9 @@ class _TwizzleViewState extends State<TwizzleView> {
     // ── Android, iOS & macOS: Native Views (AndroidView / UiKitView / AppKitView)
     if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.macOS) {
       const String viewType = 'twizzle_view';
+      final resolvedBackend = widget.backend ?? TwizzleConfig.defaultBackend;
       final Map<String, dynamic> creationParams = <String, dynamic>{
+        'backend': resolvedBackend.name,
         if (widget.initialAlgorithm != null) 'initialAlgorithm': widget.initialAlgorithm,
         'speed': widget.speed,
         'touchEnabled': widget.touchEnabled,

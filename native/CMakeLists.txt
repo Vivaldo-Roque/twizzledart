@@ -12,13 +12,23 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 include(FetchContent)
 
 # ── GLM (header-only math library) ───────────────────────────────────────────
-FetchContent_Declare(
-  glm
-  GIT_REPOSITORY https://github.com/g-truc/glm.git
-  GIT_TAG        1.0.1
-  GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(glm)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../android/src/main/cpp/include/glm/glm.hpp")
+  add_library(glm INTERFACE)
+  target_include_directories(glm INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/../android/src/main/cpp/include")
+  add_library(glm::glm ALIAS glm)
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/include/glm/glm.hpp")
+  add_library(glm INTERFACE)
+  target_include_directories(glm INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  add_library(glm::glm ALIAS glm)
+else()
+  FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG        1.0.1
+    GIT_SHALLOW    TRUE
+  )
+  FetchContent_MakeAvailable(glm)
+endif()
 
 # ── wgpu-native (pre-built binaries + headers) ───────────────────────────────
 # We download the pre-compiled wgpu-native release for the current platform.
@@ -44,6 +54,8 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Android")
     set(WGPU_TARGET "android-aarch64")
   elseif(ANDROID_ABI STREQUAL "x86_64")
     set(WGPU_TARGET "android-x86_64")
+  elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+    set(TWIZZLE_NO_WGPU TRUE)
   else()
     message(FATAL_ERROR "Unsupported Android ABI: ${ANDROID_ABI}")
   endif()
@@ -70,43 +82,45 @@ else()
   message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
 endif()
 
-set(WGPU_ARCHIVE_NAME "wgpu-${WGPU_TARGET}-release.${WGPU_ARCHIVE_EXT}")
-set(WGPU_DOWNLOAD_URL
-  "https://github.com/gfx-rs/wgpu-native/releases/download/${WGPU_VERSION}/${WGPU_ARCHIVE_NAME}")
+if(NOT TWIZZLE_NO_WGPU)
+  set(WGPU_ARCHIVE_NAME "wgpu-${WGPU_TARGET}-release.${WGPU_ARCHIVE_EXT}")
+  set(WGPU_DOWNLOAD_URL
+    "https://github.com/gfx-rs/wgpu-native/releases/download/${WGPU_VERSION}/${WGPU_ARCHIVE_NAME}")
 
-if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
-  cmake_policy(SET CMP0135 NEW)
-  FetchContent_Declare(
-    wgpu_native
-    URL ${WGPU_DOWNLOAD_URL}
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-  )
-else()
-  FetchContent_Declare(
-    wgpu_native
-    URL ${WGPU_DOWNLOAD_URL}
+  if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+    cmake_policy(SET CMP0135 NEW)
+    FetchContent_Declare(
+      wgpu_native
+      URL ${WGPU_DOWNLOAD_URL}
+      DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+  else()
+    FetchContent_Declare(
+      wgpu_native
+      URL ${WGPU_DOWNLOAD_URL}
+    )
+  endif()
+  FetchContent_MakeAvailable(wgpu_native)
+
+  # Point to the extracted directory
+  set(WGPU_DIR "${wgpu_native_SOURCE_DIR}")
+
+  # Locate the static library inside the extracted archive
+  if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(WGPU_LIB "${WGPU_DIR}/lib/wgpu_native.lib")
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(WGPU_LIB "${WGPU_DIR}/lib/libwgpu_native.a")
+  else()
+    # macOS / iOS
+    set(WGPU_LIB "${WGPU_DIR}/lib/libwgpu_native.a")
+  endif()
+
+  add_library(wgpu_native STATIC IMPORTED GLOBAL)
+  set_target_properties(wgpu_native PROPERTIES
+    IMPORTED_LOCATION "${WGPU_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "${WGPU_DIR}/include;${WGPU_DIR}/include/webgpu"
   )
 endif()
-FetchContent_MakeAvailable(wgpu_native)
-
-# Point to the extracted directory
-set(WGPU_DIR "${wgpu_native_SOURCE_DIR}")
-
-# Locate the static library inside the extracted archive
-if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  set(WGPU_LIB "${WGPU_DIR}/lib/wgpu_native.lib")
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  set(WGPU_LIB "${WGPU_DIR}/lib/libwgpu_native.a")
-else()
-  # macOS / iOS
-  set(WGPU_LIB "${WGPU_DIR}/lib/libwgpu_native.a")
-endif()
-
-add_library(wgpu_native STATIC IMPORTED GLOBAL)
-set_target_properties(wgpu_native PROPERTIES
-  IMPORTED_LOCATION "${WGPU_LIB}"
-  INTERFACE_INCLUDE_DIRECTORIES "${WGPU_DIR}/include;${WGPU_DIR}/include/webgpu"
-)
 
 # =============================================================================
 # twizzle_core — static library (GPU-agnostic: cube state + geometry + camera)
@@ -139,6 +153,7 @@ target_compile_options(twizzle_core PRIVATE
 # twizzle_wgpu — static library (WebGPU renderer, depends on twizzle_core)
 # =============================================================================
 
+if(NOT TWIZZLE_NO_WGPU)
 add_library(twizzle_wgpu STATIC
   src/wgpu/WebGpuRenderer.cpp
 )
@@ -159,4 +174,5 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Android")
   target_link_libraries(twizzle_wgpu PUBLIC android log EGL GLESv3)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(twizzle_wgpu PUBLIC dl pthread m)
+endif()
 endif()

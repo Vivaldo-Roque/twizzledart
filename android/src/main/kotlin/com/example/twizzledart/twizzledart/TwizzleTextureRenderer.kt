@@ -21,11 +21,14 @@ import android.view.View
 class TwizzleTextureRenderer(context: Context) :
     TextureView(context),
     TextureView.SurfaceTextureListener,
-    Choreographer.FrameCallback {
+    Choreographer.FrameCallback,
+    TwizzleCubeView {
+
+    override fun getView(): View = this
 
     // ── State ───────────────────────────────────────────────────────────────
-    var touchEnabled: Boolean = true
-    var onTapListener: (() -> Unit)? = null
+    override var touchEnabled: Boolean = true
+    override var onTapListener: (() -> Unit)? = null
 
     private var nativeHandle: Long = 0L          // opaque ptr to RendererInstance
     private var isDestroyed: Boolean = false
@@ -184,7 +187,7 @@ class TwizzleTextureRenderer(context: Context) :
         stopRenderLoop()
     }
 
-    fun onDestroyView() {
+    override fun onDestroyView() {
         isDestroyed = true
         stopRenderLoop()
         if (nativeHandle != 0L) {
@@ -259,7 +262,7 @@ class TwizzleTextureRenderer(context: Context) :
 
     // ── Public API (mirrors TwizzleGLSurfaceView) ─────────────────────────
 
-    fun applyAlgorithm(alg: String) {
+    override fun applyAlgorithm(alg: String) {
         if (nativeHandle != 0L) {
             nativeApplyAlgorithm(nativeHandle, alg)
             startRenderLoop()
@@ -268,46 +271,46 @@ class TwizzleTextureRenderer(context: Context) :
         }
     }
 
-    fun reset() {
+    override fun reset() {
         if (nativeHandle != 0L) {
             nativeReset(nativeHandle)
             startRenderLoop()
         }
     }
 
-    fun isAnimating(): Boolean = nativeHandle != 0L && nativeIsAnimating(nativeHandle)
+    override fun isAnimating(): Boolean = nativeHandle != 0L && nativeIsAnimating(nativeHandle)
 
-    fun play() {
+    override fun play() {
         if (nativeHandle != 0L) {
             nativePlay(nativeHandle)
             startRenderLoop()
         }
     }
 
-    fun pause() {
+    override fun pause() {
         if (nativeHandle != 0L) {
             nativePause(nativeHandle)
             startRenderLoop()
         }
     }
 
-    fun stepForward() {
+    override fun stepForward() {
         if (nativeHandle != 0L) {
             nativeStepForward(nativeHandle)
             startRenderLoop()
         }
     }
 
-    fun stepBackward() {
+    override fun stepBackward() {
         if (nativeHandle != 0L) {
             nativeStepBackward(nativeHandle)
             startRenderLoop()
         }
     }
 
-    fun isPlaying(): Boolean = nativeHandle != 0L && nativeIsPlaying(nativeHandle)
+    override fun isPlaying(): Boolean = nativeHandle != 0L && nativeIsPlaying(nativeHandle)
 
-    fun setSpeed(speed: Float) {
+    override fun setSpeed(speed: Float) {
         if (nativeHandle != 0L) {
             nativeSetSpeed(nativeHandle, speed)
             startRenderLoop()
@@ -315,9 +318,9 @@ class TwizzleTextureRenderer(context: Context) :
             pendingSpeed = speed
         }
     }
-    fun getSpeed(): Float = if (nativeHandle != 0L) nativeGetSpeed(nativeHandle) else 1.0f
+    override fun getSpeed(): Float = if (nativeHandle != 0L) nativeGetSpeed(nativeHandle) else 1.0f
 
-    fun setGLBackgroundColor(r: Float, g: Float, b: Float, a: Float) {
+    override fun setGLBackgroundColor(r: Float, g: Float, b: Float, a: Float) {
         if (nativeHandle != 0L) {
             nativeSetBackgroundColor(nativeHandle, r, g, b, a)
             startRenderLoop()
@@ -326,7 +329,7 @@ class TwizzleTextureRenderer(context: Context) :
         }
     }
 
-    fun setCameraPosition(lat: Float, lon: Float, rad: Float) {
+    override fun setCameraPosition(lat: Float, lon: Float, rad: Float) {
         if (nativeHandle != 0L) {
             nativeSetCameraPosition(nativeHandle, lat, lon, rad)
             startRenderLoop()
@@ -335,7 +338,7 @@ class TwizzleTextureRenderer(context: Context) :
         }
     }
 
-    fun setShowHint(enabled: Boolean) {
+    override fun setShowHint(enabled: Boolean) {
         if (nativeHandle != 0L) {
             nativeSetShowHint(nativeHandle, enabled)
             startRenderLoop()
@@ -344,7 +347,7 @@ class TwizzleTextureRenderer(context: Context) :
         }
     }
 
-    fun setShowFaceLetters(enabled: Boolean) {
+    override fun setShowFaceLetters(enabled: Boolean) {
         if (nativeHandle != 0L) {
             nativeSetShowFaceLetters(nativeHandle, enabled)
             startRenderLoop()
@@ -353,7 +356,7 @@ class TwizzleTextureRenderer(context: Context) :
         }
     }
 
-    fun setFaceColors(colors: FloatArray) {
+    override fun setFaceColors(colors: FloatArray) {
         if (nativeHandle != 0L) {
             nativeSetFaceColors(nativeHandle, colors)
             startRenderLoop()
@@ -362,7 +365,7 @@ class TwizzleTextureRenderer(context: Context) :
         }
     }
 
-    fun setBodyAlpha(alpha: Float) {
+    override fun setBodyAlpha(alpha: Float) {
         if (nativeHandle != 0L) {
             nativeSetBodyAlpha(nativeHandle, alpha)
             startRenderLoop()
@@ -371,15 +374,15 @@ class TwizzleTextureRenderer(context: Context) :
         }
     }
 
-    fun seekFraction(f: Float) {
+    override fun seekFraction(f: Float) {
         if (nativeHandle != 0L) {
             nativeSeekFraction(nativeHandle, f)
             startRenderLoop()
         }
     }
-    fun getCurrentFraction(): Float = if (nativeHandle != 0L) nativeCurrentFraction(nativeHandle) else 0f
+    override fun getCurrentFraction(): Float = if (nativeHandle != 0L) nativeCurrentFraction(nativeHandle) else 0f
 
-    fun setPitchLock(locked: Boolean) {
+    override fun setPitchLock(locked: Boolean) {
         if (nativeHandle != 0L) {
             nativeSetPitchLock(nativeHandle, locked)
             startRenderLoop()
@@ -388,7 +391,7 @@ class TwizzleTextureRenderer(context: Context) :
         }
     }
 
-    fun setDebugLogs(enabled: Boolean) {
+    override fun setDebugLogs(enabled: Boolean) {
         if (nativeHandle != 0L) nativeSetDebugLogs(nativeHandle, enabled)
         else pendingDebugLogs = enabled
     }
