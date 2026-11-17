@@ -100,9 +100,6 @@ void main() {
               speed: 1.0,
               touchEnabled: true,
               appearance: TwizzleAppearance.crystal,
-              onViewCreated: (ctrl) {
-                capturedController = ctrl;
-              },
               onTap: () {
                 tapCount++;
               },
